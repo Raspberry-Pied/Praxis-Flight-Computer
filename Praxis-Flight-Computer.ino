@@ -50,6 +50,7 @@ AccelData filtAccel;  //filtered acceleration
 struct Orientation {
   double pitch;
   double roll;
+  double yaw;
 };
 Orientation heading;  //heading 
 
@@ -224,7 +225,7 @@ void flashLED(unsigned long flashDelay,unsigned long &flashTimer) {
   }
 }
 /*======================= SENSOR DATA / FILTERING / ORIENTATION / VELOCITY ====================*/
-//detec apogee
+//detect apogee
 bool detectApogee(float filtAlt,Velocity velocity) {
   float verticalVelocity = velocity.z;    //vertical velocity component
 
@@ -320,7 +321,7 @@ AccelData filterAccel(sensors_event_t accelEvent) {
   return result;
 }
 
-//CALCULATE VELOCITY
+//CALCULATE VELOCITY from accel data
 Velocity calculateVelocity(AccelData filtAccel) {
   unsigned long now = millis();
   float deltaT;
@@ -353,7 +354,7 @@ Velocity calculateVelocity(AccelData filtAccel) {
   return velocity;
 }
 
-  //update sensors
+//update sensors
 void sensorEvent()  {
   mma.getEvent(&accelEvent);
   bmp_temp->getEvent(&tempEvent);
@@ -418,15 +419,7 @@ void startPins()  {
   pinMode(BUZZER_PIN,OUTPUT);
   debugLog(F("Pins Initialised"));
 }
-/*
-//start SPI interface for teensy
-void startSPI() {
-  pinMode(csPIN,OUTPUT);
-  digitalWrite(csPIN,HIGH); 
-  SPI.begin();
-  Serial.println(F("SPI Communication Initialised"));
-}
-*/
+
 /*======================= SD CARD AND LOGGING BEHAVIOUR ====================*/
 //funct to create files to write logs to - takes mode log or summary
 String createLogFile(String mode = "LOG") {
@@ -789,12 +782,12 @@ void setup() {
 void loop() {
   commandCheck();                           //check for serial command input
   sensorEvent();                            //sensors update
+  filtAccel = filterAccel(accelEvent);      //clean acceleration
   heading = getOrientation(filtAccel);      //orientation  
-  filtAccel = filterAccel(accelEvent);      //clean acceleration ^^ must be velow getOrientation
   filtAlt = filterAlt();                    //clean altitude
   velocity = calculateVelocity(filtAccel);  //velocity
   speed = velocity.magnitude;               //speed
-  updatePID();
+  updatePID();                              //update pid controller
   flushLogs();                              //write log buffers to sd card
   simulateBurnout();                        //simulate timer check for burnout 
   dataLog();                                //log data
