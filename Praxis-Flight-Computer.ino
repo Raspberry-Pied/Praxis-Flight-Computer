@@ -1,29 +1,40 @@
 /************************************************************************************************/
 /*======================= PRAXIS FLIGHT COMPUTER & STABILITY CONTROL SYSTEM ====================*/
 /************************************************************************************************/
-/*======================= PINS & ADJUSTABLE VARIABLES ====================*/
 
-////////////BRANCH TEST
-
+//PINS
 const int LED_PIN = 3;
 const int BUZZER_PIN = 4;
 const int BUTTON_PIN = 2;
-const int csPIN = 10;       //SPI chip select pin
+const int csPIN = 10;                           //SPI chip select pin
 const int xServo_1_PIN = 9;
 const int xServo_2_PIN = 8;
 const int yServo_1_PIN = 7;
 const int yServo_2_PIN = 6;
 
-const unsigned long logTime = 100;          // HOW OFTEN TO LOG DATA (ms)
-const unsigned long buttonDelay = 2000;   //safety delay on button press (ms)
-int detectLaunchAlt = 10;   //ALTITUDE (M) TO DETECT LIFTOFF
-int detectLaunchG = 2;      //G's to detect launch
-const unsigned long stopDelay = 5000;       //timer before stopping system after landing
-float noiseThresh = 0.2;    //noise removal threshold
-int detectLandAlt = 5;      //altitude to detect landing
-int detectLandSpeed = 5;    //speed to detect landing
-float burnoutSpeed = 1.2;   //gs to detect burnout
-float servoDeadband = 1;    //how much tilt for servos to actuate
+//TIMERS
+const unsigned long logTime = 10;              // HOW OFTEN TO LOG DATA (ms) - 100 HZ
+const unsigned long buttonDelay = 2000;         //safety delay on button press (ms)
+const unsigned long stopDelay = 5000;           //timer before stopping system after landing
+
+//STATE DETECTION PHYSICAL PARAMETERS
+int detectLaunchAlt=10, detectLaunchG=2;        //G's and ALTITUDE (M) TO DETECT LIFTOFF
+int detectLandAlt=5,detectLandSpeed=5;          //altitude AND VELOCITY to detect landing
+float burnoutSpeed = 1.2;                       //gs to detect burnout
+
+//PID CONTROL & SERVO VARIABLES
+double pidPitchTarget = 0;                      // target angle (vertical)
+double pidRollTarget = 0;                       // target angle (vertical)
+double Kp=2, Ki=5, Kd=1;                        //INITIAL TUNING PARAMETERS
+int minPitchAngle=-15,maxPitchAngle=15;         //CONSTRAINED PITCH LIMITS
+int minRollAngle=-15,maxRollAngle=15;           //CONSTRAINED ROLL LIMITS
+float servoDeadband = 1;                        //how much tilt (deg) for servos to actuate
+
+//KALMAN FILTER PARAMETERS
+float e_mea = 0.3;                              // Measurement noise
+float e_est = 0.5;                              // Estimation error
+float q     = 0.01;                             // Process noise
+float noiseThresh = 0.2;                        //noise removal threshold for kalman filter
 
 /*======================= STRUCTS & ENUMS ====================*/
 //NET ACCELERATION CALCULATION
@@ -49,7 +60,7 @@ struct Velocity {
   float z;
   float magnitude;
 };
-Velocity velocity = {0, 0, 0, 0};
+Velocity velocity = {0, 0, 0, 0};   //velocity
 
 //ARMING STATE MACHINE
 enum class ArmState {on,initialised,armed,locked};
@@ -93,22 +104,12 @@ Adafruit_Sensor *bmp_pressure;
 //kalman filter
 #include <SimpleKalmanFilter.h>
 SimpleKalmanFilter pressureKalmanFilter(1, 1, 0.01);
-// --- Kalman filter parameters ---
-float e_mea = 0.3;  // Measurement noise
-float e_est = 0.5;  // Estimation error
-float q     = 0.01; // Process noise
 SimpleKalmanFilter accelKalmanX(e_mea, e_est, q);
 SimpleKalmanFilter accelKalmanY(e_mea, e_est, q);
 SimpleKalmanFilter accelKalmanZ(e_mea, e_est, q);
 
 //PID CONTROL
 #include <PID_v1.h>
-double pidPitchTarget = 0; // target angle (vertical)
-double pidRollTarget = 0; // target angle (vertical)
-//Specify the links and initial tuning parameters
-double Kp=2, Ki=5, Kd=1;
-int minPitchAngle=-15,maxPitchAngle=15;
-int minRollAngle=-15,maxRollAngle=15;
 //SERVO TARGET ANGLES
 double xAngle;
 double yAngle;
@@ -166,7 +167,7 @@ bool apogeeDetected = false;           // flag
 File debugFile;
 File logFile;
 unsigned long lastFlushTime = 0;
-const unsigned long flushInterval = 1000;  // flush every 1s
+const unsigned long flushInterval = 500;  // flush every 1s
 
 /*======================= COMMANDS ====================*/
 //check serial for commands
@@ -479,7 +480,7 @@ String createLogFile(String mode = "LOG") {
   if (mode.equalsIgnoreCase("SUMMARY")) {
     file.println(F("Max Altitude (m),Apogee Timestamp (s),Flight Duration (s)"));
   } else {
-    file.println(F("Temp (C),Pressure (Pa),Altitude (m),X acceleration (m/s^2),Y acceleration (m/s^2),Z acceleration (m/s^2),Magnitude of Acceleration (m/s^2),Pitch (deg),Roll (deg),Magnitude of Velocity (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)"));
+    file.println(F("Temp (C),Pressure (Pa),Altitude (m),X acceleration (m/s^2),Y acceleration (m/s^2),Z acceleration (m/s^2),Magnitude of Acceleration (m/s^2),Pitch (deg),Roll (deg),Magnitude of Velocity (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s),X Servo Target Angle (deg),Y Servo Target Angle (deg)"));
   }
 
   // --- Print confirmation ---
@@ -576,7 +577,10 @@ void dataLog()  {
                         String(speed) + "," +
                         String(velocity.x) + "," +
                         String(velocity.y) + "," +
-                        String(velocity.z);
+                        String(velocity.z) + "," +
+                        String(xAngle) + "," +
+                        String(yAngle);
+
         logFile.println(csvLog);
       } else {
         debugLog(F("Error Logging Data"));
@@ -680,7 +684,9 @@ void updatePID() {
   //pidDirection();
   pitchPID.Compute();
   rollPID.Compute();
-  if (!servoLock) adjustServos();   //only actuate servos if not locked
+  if (!servoLock) {
+    adjustServos();   //only actuate servos if not locked
+  }
 }
 
 //adjust servos to pid values
