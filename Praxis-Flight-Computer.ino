@@ -13,7 +13,7 @@ const int yServo_1_PIN = 7;
 const int yServo_2_PIN = 6;
 
 //TIMERS
-const unsigned long logTime = 10;              // HOW OFTEN TO LOG DATA (ms) - 100 HZ
+const unsigned long logTime = 10;               // HOW OFTEN TO LOG DATA (ms) - 100 HZ
 const unsigned long buttonDelay = 2000;         //safety delay on button press (ms)
 const unsigned long stopDelay = 5000;           //timer before stopping system after landing
 
@@ -39,12 +39,15 @@ float noiseThresh = 0.2;                        //noise removal threshold for ka
 /*======================= STRUCTS & ENUMS ====================*/
 //NET ACCELERATION CALCULATION
 struct AccelData {
-  float x;
-  float y;
-  float z;
+  float x,y,z;
   float magnitude;
 };
 AccelData filtAccel;  //filtered acceleration
+
+struct GyroData {
+  float x,y,z;
+}
+
 
 //ORIENTATION CALCULATION
 struct Orientation {
@@ -79,17 +82,67 @@ FlightState flightState = FlightState::ground;
 //BMP280 barometer
 #include <Wire.h>
 #include <Adafruit_BMP280.h>
-#define BMP280_ADDRESS 0x76                ///////I2C address already defined in adafruit library
+#define BMP280_ADDRESS 0x76                //I2C ADDRESS
 Adafruit_BMP280 bmp; 
+Adafruit_Sensor *bmp_temp;                 //POINTERS for using bmp temp in similar format to accelerometer
+Adafruit_Sensor *bmp_pressure;
 
+/*
 //MMA8451 3 axis accelerometer
 #include <Adafruit_MMA8451.h>
 #include <Adafruit_Sensor.h>
 #define MMA8451_ADDRESS 0x1D                ////////VERIFY I2C ADDRESS - could be 0x1C////////
 Adafruit_MMA8451 mma = Adafruit_MMA8451();
-Adafruit_Sensor *bmp_temp;                  //POINTERS for using bmp temp in similar format to accelerometer
-Adafruit_Sensor *bmp_pressure;
+*/
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// MPU6050 3-axis accelerometer and gyro
+#include <mpu6050.h>
+#define MPU_ADDRESS 0x68  // AD0 pin tied to GND
+
+//setup
+wakeSensor(MPU_ADDRESS); // wakes sensor from sleep mode
+
+//initialise
+calculateGyroOffset(MPU_ADDRESS, gyroOffsetX, gyroOffsetY, gyroOffsetZ); // provide MPU6050 address and gyroscope values are written to 3 provided variables
+calculateAccelOffset(MPU_ADDRESS, accelOffsetX, accelOffsetY);
+
+AccelData mpuAccelRaw;
+AccelData mpuAccelGforce;
+GyroData mpuGyroRaw;
+GyroData mpuGyroDegPS;
+Orientation gyroOrientation;
+Orientation accelOrientation;
+
+//loop
+readAccelData(MPU_ADDRESS, mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z); // pass MPU6050 address and gyroscope values are written to 3 provided variables
+rawAccelToGForce(mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z, mpuAccelGforce.x, mpuAccelGforce.y, mpuAccelGforce.z); // provide the 3 raw gyroscope values and returns them in their dps (degrees per second) values
+
+readGyroData(MPU_ADDRESS, mpuGyroRaw.x, mpuGyroRaw.y, mpuGyroRaw.z); // pass MPU6050 address and accelerometer values are written to 3 provided variables
+rawGyroToDPS(mpuGyroRaw.x, mpuGyroRaw.y, mpuGyroRaw.z, mpuGyroDegPS.x, mpuGyroDegPS.y, mpuGyroDegPS.z); // provide the 3 raw accelerometer values and returns them in their g force values
+
+  mpuGyroDegPS.x = mpuGyroDegPS.x - gyroOffsetX; // adjust gyroscope values to compensate for offset values
+  mpuGyroDegPS.y = mpuGyroDegPS.y - gyroOffsetY;
+  mpuGyroDegPS.z = mpuGyroDegPS.z - gyroOffsetZ;
+
+dpsToAngles(mpuGyroDegPS.x, mpuGyroDegPS.y, mpuGyroDegPS.z, gyroOrientation.pitch, gyroOrientation.roll, gyroOrientation.yaw);
+calculateAnglesFromAccel(mpuAccelGforce.x, mpuAccelGforce.y, mpuAccelGforce.z, accelOrientation.pitch, accelOrientation.roll); // uses trigonometry to calculate angles with accelerometer values    // prints mpu6050 values in the terminal
+   
+  accelOrientation.pitch = accelOrientation.pitch - accelOffsetX; // adjust accelerometer values to compensate for offset values
+  accelOrientation.roll = accelOrientation.roll - accelOffsetY;
+
+//start accelerometer and validate connection
+void startAccelerometer() {
+ /* if (!mma.begin(MMA8451_ADDRESS))  {
+    debugLog(F("Could not find a valid MMA8451 sensor"));
+    while (1) delay(10); //if no valid sensor it gets stuck
+  }
+  mma.setRange(MMA8451_RANGE_8_G);    ////set 8g range
+  */
+  wakeSensor(MPU_ADDRESS); // wakes sensor from sleep mode
+  debugLog(F("Accelerometer Initialised"));
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////
 //Buzzer noises and other libraries
 #include <CuteBuzzerSounds.h>
 #include <math.h>
@@ -265,7 +318,7 @@ void calibrateAccel() {
   initAccelY = sumY / samples;
   initAccelZ = sumZ / samples;
 }
-
+/*
 //Calculate pitch and roll
 Orientation getOrientation(AccelData filtAccel)  {
   Orientation oriResult;
@@ -278,7 +331,7 @@ Orientation getOrientation(AccelData filtAccel)  {
 
   return oriResult;
 }
-
+*/
 //filter acceleration data
 AccelData filterAccel(sensors_event_t accelEvent) {
   // --- Step 1: Remove static sensor bias (from calibration) ---
@@ -388,16 +441,6 @@ void startBarometer() {
   bmp_temp = bmp.getTemperatureSensor();
   bmp_pressure = bmp.getPressureSensor();
   debugLog(F("Barometer Initialised"));
-}
-
-//start accelerometer and validate connection
-void startAccelerometer() {
-  if (!mma.begin(MMA8451_ADDRESS))  {
-    debugLog(F("Could not find a valid MMA8451 sensor"));
-    while (1) delay(10); //if no valid sensor it gets stuck
-  }
-  mma.setRange(MMA8451_RANGE_8_G);    ////set 8g range
-  debugLog(F("Accelerometer Initialised"));
 }
  
 //SD card init
