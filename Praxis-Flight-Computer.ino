@@ -86,14 +86,15 @@ Adafruit_Sensor *bmp_pressure;
 // MPU6050 3-axis accelerometer and gyro
 #include <mpu6050.h>
 #define MPU_ADDRESS 0x68  // AD0 pin tied to GND
-
 AccelData mpuAccelRaw;
 AccelData mpuAccelGforce;
 Orientation accelOrientation;
-
-double initAccelX;
-double initAccelY;
-double initAccelZ;
+float accelOffsetX = 0;
+float accelOffsetY = 0;
+//calibration values for filtering accel
+float initAccelX = 0;
+float initAccelY = 0;
+float initAccelZ = 0;
 /*
 struct GyroData {
   float x,y,z;
@@ -113,107 +114,6 @@ rawGyroToDPS(mpuGyroRaw.x, mpuGyroRaw.y, mpuGyroRaw.z, mpuGyroDegPS.x, mpuGyroDe
 dpsToAngles(mpuGyroDegPS.x, mpuGyroDegPS.y, mpuGyroDegPS.z, gyroOrientation.pitch, gyroOrientation.roll, gyroOrientation.yaw);
 */
 
-//start accelerometer and validate connection
-void startAccelerometer() {
-  wakeSensor(MPU_ADDRESS); // wakes sensor from sleep mode
-  delay(200);
-  debugLog(F("Accelerometer Initialised"));
-}
-
-//calibrate acceleration values for kalman filtering
-void calibrateAccel() {
-  const int samples = 100;
-  float sumX = 0, sumY = 0, sumZ = 0;
-
-  for (int i = 0; i < samples; i++) {
-    // Step 1: Read raw accelerometer data from MPU6050
-    readAccelData(MPU_ADDRESS, mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z);
-
-    // Step 2: Convert raw data to G-forces
-    rawAccelToGForce(mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z,
-                     mpuAccelGforce.x, mpuAccelGforce.y, mpuAccelGforce.z);
-
-    // Step 3: Accumulate sums for averaging
-    sumX += mpuAccelGforce.x;
-    sumY += mpuAccelGforce.y;
-    sumZ += mpuAccelGforce.z;
-
-    delay(10); // give sensor time between reads
-  }
-
-  // Step 4: Calculate and store average (static bias)
-  initAccelX = sumX / samples;
-  initAccelY = sumY / samples;
-  initAccelZ = sumZ / samples;
-
-  // Step 5: Optional correction for gravity if calibrating flat
-  // On a flat surface, Z should measure ~+1g. Adjust so that happens.
-  initAccelZ -= 1.0;
-
-  debugLog(F("Accelerometer calibration complete, initial values (x,y,z):"));
-  debugLog(String(initAccelX));
-  debugLog(String(initAccelY));
-  debugLog(String(initAccelZ));
-}
-
-
-void getAccelData() {
-  readAccelData(MPU_ADDRESS, mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z); 
-  rawAccelToGForce(mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z, mpuAccelGforce.x, mpuAccelGforce.y, mpuAccelGforce.z); 
-}
-
-Orientation getOrientation(Orientation accelOrientation) {
-  float currentPitch = accelOrientation.pitch;
-  float currentRoll = accelOrientation.roll;
-
-  calculateAnglesFromAccel(filtAccel.x, filtAccel.y, filtAccel.z, currentPitch, currentRoll); // uses trigonometry to calculate angles with accelerometer values    // prints mpu6050 values in the terminal
-
-  accelOrientation.pitch = currentPitch - accelOffsetX; // adjust accelerometer values to compensate for offset values
-  accelOrientation.roll = currentRoll - accelOffsetY;
-
-  return accelOrientation;
-}
-
-// Filtering function for MPU6050 accelerometer data
-AccelData filterAccel(AccelData mpuAccelGforce) {
-  // --- Step 1: Remove static sensor bias (from calibration) ---
-  float rawX = mpuAccelGforce.x - initAccelX;
-  float rawY = mpuAccelGforce.y - initAccelY;
-  float rawZ = mpuAccelGforce.z - initAccelZ;
-
-  // --- Step 2: Estimate gravity vector from current orientation ---
-  float pitchRad = heading.pitch * DEG_TO_RAD;
-  float rollRad  = heading.roll  * DEG_TO_RAD;
-
-  // gravity components in sensor frame
-  float gX = 9.81f * sin(pitchRad);
-  float gY = -9.81f * sin(rollRad);
-  float gZ = 9.81f * cos(pitchRad) * cos(rollRad);
-
-  // --- Step 3: Subtract gravity from raw acceleration ---
-  float linX = rawX - gX;
-  float linY = rawY - gY;
-  float linZ = rawZ - gZ;
-
-  // --- Step 4: Zero out very small noise ---
-  if (fabs(linX) < noiseThresh) linX = 0;
-  if (fabs(linY) < noiseThresh) linY = 0;
-  if (fabs(linZ) < noiseThresh) linZ = 0;
-
-  // --- Step 5: Apply Kalman filtering per axis ---
-  float filtX = accelKalmanX.updateEstimate(linX);
-  float filtY = accelKalmanY.updateEstimate(linY);
-  float filtZ = accelKalmanZ.updateEstimate(linZ);
-
-  // --- Step 6: Package filtered results ---
-  AccelData result;
-  result.x = filtX;
-  result.y = filtY;
-  result.z = filtZ;
-  result.magnitude = sqrt(filtX*filtX + filtY*filtY + filtZ*filtZ);
-
-  return result;
-}
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //Buzzer noises and other libraries
 #include <CuteBuzzerSounds.h>
@@ -260,10 +160,7 @@ bool simulateCheck = 0;
 String debugFilePath;       //file path for debug logs
 String logFilePath;         //file path for log file on sd card
 
-//calibration values for filtering accel
-float initAccelX = 0;
-float initAccelY = 0;
-float initAccelZ = 0;
+
 
 //FOR FLASHING LED
 bool ledState = 0;
@@ -349,7 +246,7 @@ void flashLED(unsigned long flashDelay,unsigned long &flashTimer) {
     flashTimer = millis();
   }
 }
-/*======================= SENSOR DATA / FILTERING / ORIENTATION / VELOCITY ====================*/
+/*======================= APOGEE / VELOCITY / BMP FILTERING ====================*/
 //detect apogee
 bool detectApogee(float filtAlt,Velocity velocity) {
   float verticalVelocity = velocity.z;    //vertical velocity component
@@ -417,6 +314,109 @@ void sensorEvent()  {
 //kalman filter altitude
 float filterAlt() {
   return pressureKalmanFilter.updateEstimate(bmp.readAltitude(groundPres));
+}
+/*======================= MPU DATA AND FILTERING + ORIENTATION DETECTION ====================*/
+//start accelerometer and validate connection
+void startAccelerometer() {
+  wakeSensor(MPU_ADDRESS); // wakes sensor from sleep mode
+  delay(200);
+  debugLog(F("Accelerometer Initialised"));
+}
+
+//calibrate acceleration values for kalman filtering
+void calibrateAccel() {
+  const int samples = 100;
+  float sumX = 0, sumY = 0, sumZ = 0;
+
+  for (int i = 0; i < samples; i++) {
+    // Step 1: Read raw accelerometer data from MPU6050
+    readAccelData(MPU_ADDRESS, mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z);
+
+    // Step 2: Convert raw data to G-forces
+    rawAccelToGForce(mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z,
+                     mpuAccelGforce.x, mpuAccelGforce.y, mpuAccelGforce.z);
+
+    // Step 3: Accumulate sums for averaging
+    sumX += mpuAccelGforce.x;
+    sumY += mpuAccelGforce.y;
+    sumZ += mpuAccelGforce.z;
+
+    delay(10); // give sensor time between reads
+  }
+
+  // Step 4: Calculate and store average (static bias)
+  initAccelX = sumX / samples;
+  initAccelY = sumY / samples;
+  initAccelZ = sumZ / samples;
+
+  // Step 5: Optional correction for gravity if calibrating flat
+  // On a flat surface, Z should measure ~+1g. Adjust so that happens.
+  initAccelZ -= 1.0;
+
+  debugLog(F("Accelerometer calibration complete, initial values (x,y,z):"));
+  debugLog(String(initAccelX));
+  debugLog(String(initAccelY));
+  debugLog(String(initAccelZ));
+}
+
+//CHECK MPU FOR NEW DATA
+void getAccelData() {
+  readAccelData(MPU_ADDRESS, mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z); 
+  rawAccelToGForce(mpuAccelRaw.x, mpuAccelRaw.y, mpuAccelRaw.z, mpuAccelGforce.x, mpuAccelGforce.y, mpuAccelGforce.z); 
+}
+
+//CALCULATE PITCH AND ROLL FROM ACCELEROMETER
+Orientation getOrientation(AccelData filtAccel) {
+  Orientation result;
+  float pitch,roll;
+
+  calculateAnglesFromAccel(filtAccel.x, filtAccel.y, filtAccel.z, pitch, roll); // uses trigonometry to calculate angles with accelerometer values    // prints mpu6050 values in the terminal
+
+  result.pitch = pitch - accelOffsetX; // adjust accelerometer values to compensate for offset values
+  result.roll = roll - accelOffsetY;
+
+  return result;
+}
+
+// Filtering function for MPU6050 accelerometer data
+AccelData filterAccel(AccelData mpuAccelGforce) {
+  // --- Step 1: Remove static sensor bias (from calibration) ---
+  float rawX = mpuAccelGforce.x - initAccelX;
+  float rawY = mpuAccelGforce.y - initAccelY;
+  float rawZ = mpuAccelGforce.z - initAccelZ;
+
+  // --- Step 2: Estimate gravity vector from current orientation ---
+  float pitchRad = heading.pitch * DEG_TO_RAD;
+  float rollRad  = heading.roll  * DEG_TO_RAD;
+
+  // gravity components in sensor frame
+  float gX = 9.81f * sin(pitchRad);
+  float gY = -9.81f * sin(rollRad);
+  float gZ = 9.81f * cos(pitchRad) * cos(rollRad);
+
+  // --- Step 3: Subtract gravity from raw acceleration ---
+  float linX = rawX - gX;
+  float linY = rawY - gY;
+  float linZ = rawZ - gZ;
+
+  // --- Step 4: Zero out very small noise ---
+  if (fabs(linX) < noiseThresh) linX = 0;
+  if (fabs(linY) < noiseThresh) linY = 0;
+  if (fabs(linZ) < noiseThresh) linZ = 0;
+
+  // --- Step 5: Apply Kalman filtering per axis ---
+  float filtX = accelKalmanX.updateEstimate(linX);
+  float filtY = accelKalmanY.updateEstimate(linY);
+  float filtZ = accelKalmanZ.updateEstimate(linZ);
+
+  // --- Step 6: Package filtered results ---
+  AccelData result;
+  result.x = filtX;
+  result.y = filtY;
+  result.z = filtZ;
+  result.magnitude = sqrt(filtX*filtX + filtY*filtY + filtZ*filtZ);
+
+  return result;
 }
 /*======================= INITIALISATIONS ====================*/
 //BUZZER INITIALISE
