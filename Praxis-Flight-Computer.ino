@@ -3,10 +3,12 @@
 /************************************************************************************************/
 
 //PINS
+const int BUTTON_PIN = 2;
 const int LED_PIN = 3;
 const int BUZZER_PIN = 4;
-const int BUTTON_PIN = 2;
+
 const int csPIN = 10;                           //SPI chip select pin
+
 const int xServo_1_PIN = 9;
 const int xServo_2_PIN = 8;
 const int yServo_1_PIN = 7;
@@ -156,11 +158,10 @@ unsigned long flightStart;
 unsigned long apogeeTime;
 bool ended = 0; //flight ended
 bool simulateCheck = 0;
+bool apogeeCheck =0;
 
 String debugFilePath;       //file path for debug logs
 String logFilePath;         //file path for log file on sd card
-
-
 
 //FOR FLASHING LED
 bool ledState = 0;
@@ -173,6 +174,7 @@ unsigned long flashTimer;
 unsigned long dataTimer;
 unsigned long landTimer;
 unsigned long simTimer;
+unsigned long apogeeTimer;
 
 //SPEED CALC
 float currentSpeed = 0.0;           //speed in m/s
@@ -195,20 +197,55 @@ const unsigned long flushInterval = 500;  // flush every 1s
 /*======================= COMMANDS ====================*/
 //check serial for commands
 void commandCheck() {
+  if (!Serial.available()) return;
+
+  String command = Serial.readStringUntil('\n');
+  command.trim();
+  command.toLowerCase();
+
+  if (command == "simulatem") {                 //manual simulation 
+    simulateCommand("burn");
+  } else if (command == "coast") {
+    simulateCommand("coast");
+  } else if (command == "apogee") {
+    simulateCommand("apogee");
+  } else if (command == "landed") {
+    simulateCommand("landed");
+  } else if (command == "simulatea") {
+    simulateAutoAdvance();                      //automatic simulation
+  } else {
+    debugLog(F("Unknown command"));
+  }
+}
+
+/*
+//check serial for commands
+void commandCheck() {
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
-    if (command.equalsIgnoreCase("simulate")) {       ///simulate command
-      simulate();   
+    if (command.equalsIgnoreCase("simulate")) {       ///simulate command - starts launch sequence
       debugLog(F("Simulate command received"));
+      simulate();   
     }
     if (command.equalsIgnoreCase("apogee")) {       //apogee cmd - only triggers after simulate
       if (!simulateCheck) {
         debugLog(F("Apogee command not accepted - simulate not triggered"));
       } else  {
         if (millis() - simTimer >= 5000) {
-          flightState = FlightState::apogee;
           debugLog(F("Apogee command accepted"));
+          flightState = FlightState::apogee;
+          debugLog(F("Simulated State --> Apogee"));
+        }
+      }
+    }
+    if (command.equalsIgnoreCase("landed")) {       //apogee cmd - only triggers after simulate
+      if (!apogeeCheck) {
+        debugLog(F("Landed command not accepted - apogee not triggered"));
+      } else  {
+        if (millis() - apogeeTimer >= 5000) {
+          debugLog(F("Landed command accepted"));
+          simLanded();
         }
       }
     }
@@ -217,19 +254,33 @@ void commandCheck() {
 
 //simulate  - override altitude for testing?
 void simulate() {
-  detectLaunchAlt = 1;
-  detectLaunchG = 0.1;
+  detectLaunchAlt = 0;
+  detectLaunchG = 0;
   simTimer = millis();
   simulateCheck = 1;
+  debugLog(F("Simulated State --> Burn"));
+}
+
+//simulate landing conditions
+void simLanded()  {
+  detectLandAlt = 0;
+  detectLandSpeed = 0;
+  debugLog(F("Simulated State --> Landed"));
 }
 
 //in loop to detect burnout after 3s
 void simulateBurnout()  {
-  if (simulateCheck == 1)  {
-    if (millis() - simTimer >= 3000) burnoutSpeed = 0.1;    //burnout after 3s
+  if (simulateCheck == 1 && flightState == FlightState::burn)  {
+    if (millis() - simTimer >= 3000) {
+      burnoutSpeed = 0;    //burnout after 3s
+      debugLog(F("Simulated State --> Coast"));
+      simulateCheck = 0;
+      apogeeCheck = 1;
+      apogeeTimer = millis();
+    }
   }
-}
-
+} 
+*/
 /*======================= MISC OUTPUTS ====================*/
 // continuous buzzer beeps for when armed 
 void armBuzzer(unsigned long &buzzerTimer) {
@@ -525,8 +576,10 @@ String createLogFile(String mode = "LOG") {
   debugLog(F(" file: "));
   debugLog(String(filePath));
 
+  flushNow();   //flush header file onto sd card
   return filePath;
 }
+
 // --- Flash string overload (for F() macro) //////////////////debug log
 void debugLog(const __FlashStringHelper *message) {
   unsigned long t = millis();
@@ -759,13 +812,13 @@ void startServos()  {
 /*======================= TIMED CALLS ====================*/
 //arm system
 void systemArm()  {
+  armState = ArmState::armed;
+  debugLog(F("System State --> Armed"));
   lockServos();
   zeroServos();
   cute.play(S_BUTTON_PUSHED);
   dataLogging = true;
-  armState = ArmState::armed;
   debugLog(F("Datalogging Started"));
-  debugLog(F("System State --> Armed"));
 }
 
 //system landed calls
@@ -829,12 +882,12 @@ void loop() {
   filtAccel = filterAccel(mpuAccelGforce);  //clean acceleration
   heading = getOrientation(filtAccel);      //get orientation from filtered data
   filtAlt = filterAlt();                    //clean altitude
-  velocity = calculateVelocity(filtAccel);  //velocity
-  speed = velocity.magnitude;               //speed
+  velocity = calculateVelocity(filtAccel);  //check velocity
+  speed = velocity.magnitude;               //find current speed
   updatePID();                              //update pid controller
   flushLogs();                              //write log buffers to sd card
   simulateBurnout();                        //simulate timer check for burnout 
-  dataLog();                                //log data
+  dataLog();                                //log data to sd card
 
 
   //DETECT APOGEE
@@ -905,11 +958,11 @@ void loop() {
       //CAN ADD EXTRA STUFF LATER, EJECTION CHARGES ETC
       flightState = FlightState::descent;
       debugLog(F("Flight State --> Descent"));
+      lockServos();
+      zeroServos();
       break;
 
       case FlightState::descent:
-      lockServos();
-      zeroServos();
       if (filtAlt <= detectLandAlt && speed <= detectLandSpeed) {
         landTimer = millis();
         flightState = FlightState::landed;
