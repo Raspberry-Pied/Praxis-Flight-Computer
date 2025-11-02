@@ -197,30 +197,6 @@ const unsigned long flushInterval = 500;  // flush every 1s
 /*======================= COMMANDS ====================*/
 //check serial for commands
 void commandCheck() {
-  if (!Serial.available()) return;
-
-  String command = Serial.readStringUntil('\n');
-  command.trim();
-  command.toLowerCase();
-
-  if (command == "simulatem") {                 //manual simulation 
-    simulateCommand("burn");
-  } else if (command == "coast") {
-    simulateCommand("coast");
-  } else if (command == "apogee") {
-    simulateCommand("apogee");
-  } else if (command == "landed") {
-    simulateCommand("landed");
-  } else if (command == "simulatea") {
-    simulateAutoAdvance();                      //automatic simulation
-  } else {
-    debugLog(F("Unknown command"));
-  }
-}
-
-/*
-//check serial for commands
-void commandCheck() {
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
@@ -280,7 +256,7 @@ void simulateBurnout()  {
     }
   }
 } 
-*/
+
 /*======================= MISC OUTPUTS ====================*/
 // continuous buzzer beeps for when armed 
 void armBuzzer(unsigned long &buzzerTimer) {
