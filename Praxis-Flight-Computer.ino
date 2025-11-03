@@ -25,12 +25,12 @@ int detectLandAlt=5,detectLandSpeed=5;          //altitude AND VELOCITY to detec
 float burnoutSpeed = 1.2;                       //gs to detect burnout
 
 //PID CONTROL & SERVO VARIABLES
-double pidPitchTarget = 0;                      // target angle (vertical)
-double pidRollTarget = 0;                       // target angle (vertical)
+double pidPitchTarget=0, pidRollTarget=0;       //target angle (vertical)
 double Kp=2, Ki=5, Kd=1;                        //INITIAL TUNING PARAMETERS
 int minPitchAngle=-15,maxPitchAngle=15;         //CONSTRAINED PITCH LIMITS
 int minRollAngle=-15,maxRollAngle=15;           //CONSTRAINED ROLL LIMITS
 float servoDeadband = 1;                        //how much tilt (deg) for servos to actuate
+const int maxPIDOutput = 30;                    //max internal pid correction - in valueless pid units, not angles
 
 //KALMAN FILTER PARAMETERS
 float e_mea = 0.3;                              // Measurement noise
@@ -81,8 +81,8 @@ FlightState flightState = FlightState::ground;
 #include <Adafruit_BMP280.h>
 #define BMP280_ADDRESS 0x76                //I2C ADDRESS
 Adafruit_BMP280 bmp; 
-Adafruit_Sensor *bmp_temp;                 //POINTERS for using bmp temp in similar format to accelerometer
-Adafruit_Sensor *bmp_pressure;
+Adafruit_Sensor *bmp_temp = bmp.getTemperatureSensor();   //pointers for getting bmp data
+Adafruit_Sensor *bmp_pressure = bmp.getPressureSensor();
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // MPU6050 3-axis accelerometer and gyro
@@ -138,11 +138,11 @@ SimpleKalmanFilter accelKalmanZ(e_mea, e_est, q);
 
 //PID CONTROL
 #include <PID_v1.h>
-//SERVO TARGET ANGLES
-double xAngle;
-double yAngle;
-PID pitchPID(&heading.pitch, &xAngle, &pidPitchTarget, Kp, Ki, Kd, DIRECT);
-PID rollPID(&heading.roll, &yAngle, &pidRollTarget, Kp, Ki, Kd, DIRECT);
+double xAngle,yAngle;             //SERVO TARGET ANGLES
+double pitchInput, pitchOutput;   //Input variables for pid
+double rollInput, rollOutput;     //outputs for pid
+PID pitchPID(&pitchInput, &pitchOutput, &pidPitchTarget, Kp, Ki, Kd, DIRECT);
+PID rollPID(&rollInput, &rollOutput, &pidRollTarget, Kp, Ki, Kd, DIRECT);
 
 /*======================= GLOBAL VARIABLES ====================*/
 float initPres;            //initlisation pressure
@@ -150,7 +150,6 @@ float groundPres;           //init pres converted to hPa
 float initAccel;            //initialistaion net acceleration
 bool dataLogging = false;   //TO TURN ON DATALOGGING
 int detectLaunchAccel;      //calculated value for liftoff accel
-sensors_event_t accelEvent,presEvent,tempEvent; //data recording event
 float filtAlt;    //filtered altitude
 float speed;    //speed
 bool servoLock = 1;   //locks servo actuation
@@ -192,7 +191,7 @@ bool apogeeDetected = false;           // flag
 File debugFile;
 File logFile;
 unsigned long lastFlushTime = 0;
-const unsigned long flushInterval = 500;  // flush every 1s
+const unsigned long flushInterval = 500;  // flush every 0.5s
 
 /*======================= COMMANDS ====================*/
 //check serial for commands
@@ -215,15 +214,11 @@ void commandCheck() {
         }
       }
     }
-    if (command.equalsIgnoreCase("landed")) {       //apogee cmd - only triggers after simulate
-      if (!apogeeCheck) {
-        debugLog(F("Landed command not accepted - apogee not triggered"));
-      } else  {
-        if (millis() - apogeeTimer >= 5000) {
-          debugLog(F("Landed command accepted"));
-          simLanded();
-        }
-      }
+    if (command.equalsIgnoreCase("landed")) {       ///simulate command - starts launch sequence
+      debugLog(F("Landed command received"));
+      flightState = FlightState::landed;
+      landTimer = millis();
+      debugLog(F("Simulated State --> Landed"));
     }
   }
 }
@@ -235,13 +230,6 @@ void simulate() {
   simTimer = millis();
   simulateCheck = 1;
   debugLog(F("Simulated State --> Burn"));
-}
-
-//simulate landing conditions
-void simLanded()  {
-  detectLandAlt = 0;
-  detectLandSpeed = 0;
-  debugLog(F("Simulated State --> Landed"));
 }
 
 //in loop to detect burnout after 3s
@@ -298,6 +286,18 @@ bool detectApogee(float filtAlt,Velocity velocity) {
   return false;
 }
 
+void ifApogee() {
+  //DETECT APOGEE
+  if (!apogeeDetected && detectApogee(filtAlt, velocity)) {
+    flightState = FlightState::apogee;
+    apogeeTime = millis() - flightStart;
+    debugLog(F("Apogee detected! Max Altitude: "));
+    debugLog(String(maxAlt));
+    debugLog(F("Flight State --> Apogee"));
+    flushNow();
+  }
+}
+
 //CALCULATE VELOCITY from accel data
 Velocity calculateVelocity(AccelData filtAccel) {
   unsigned long now = millis();
@@ -332,16 +332,18 @@ Velocity calculateVelocity(AccelData filtAccel) {
 }
 
 //update sensors
-void sensorEvent()  {
-  //mma.getEvent(&accelEvent);
+void getBMPdata(sensors_event_t &tempEvent, sensors_event_t &presEvent)  {
   bmp_temp->getEvent(&tempEvent);
   bmp_pressure->getEvent(&presEvent);
+  //tempEvent.temperature :call using:
+  //pressEvent.pressure
 }
 
 //kalman filter altitude
 float filterAlt() {
   return pressureKalmanFilter.updateEstimate(bmp.readAltitude(groundPres));
 }
+
 /*======================= MPU DATA AND FILTERING + ORIENTATION DETECTION ====================*/
 //start accelerometer and validate connection
 void startAccelerometer() {
@@ -465,8 +467,6 @@ void startBarometer() {
                   Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
                   Adafruit_BMP280::FILTER_X16,      /* Filtering. */
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
-  bmp_temp = bmp.getTemperatureSensor();
-  bmp_pressure = bmp.getPressureSensor();
   debugLog(F("Barometer Initialised"));
 }
  
@@ -624,7 +624,7 @@ void openLogFile()  {
   }
 }
 //datalogging function
-void dataLog()  {
+void dataLog(sensors_event_t tempEvent,sensors_event_t presEvent)  {
   if (dataLogging) {
     if (millis()-dataTimer>=logTime)  {
 
@@ -670,12 +670,12 @@ void generateSummary()  {
 }
 //flush log buffer to sd card
 void flushLogs()  {
-  unsigned long now = millis();
-  if (now - lastFlushTime >= flushInterval) {
+  unsigned long flushTimer = millis();
+  if (flushTimer - lastFlushTime >= flushInterval) {
     if (SD.exists("/PRAXIS"))  {
       if (debugFile) debugFile.flush();
       if (logFile) logFile.flush();
-      lastFlushTime = now;
+      lastFlushTime = flushTimer;
     } else {
       debugLog(F("Warning: SD card disconnected!"));
     }
@@ -703,6 +703,7 @@ void endLogging() {
   }
 }
 /*======================= PID CLOSED LOOP CONTROL & SERVO BEHAVIOURS ====================*/
+
 void lockServos() {
   servoLock = 1;
   debugLog(F("Servos Locked"));
@@ -712,6 +713,7 @@ void unlockServos() {
   servoLock = 0;
   debugLog(F("Servos Unlocked"));
 }
+
 //Move mirrored X servos - ONLY MOVE IF ANGLE CHANGE > 1 DEG
 void moveXservos(int xAngle)  {
   static int lastX = 90;  // start neutral; persists between calls
@@ -740,17 +742,26 @@ void moveYservos(int yAngle)  {
 void startPID() {
   pitchPID.SetMode(AUTOMATIC);
   rollPID.SetMode(AUTOMATIC);
-  pitchPID.SetOutputLimits(minPitchAngle, maxPitchAngle);
-  rollPID.SetOutputLimits(minRollAngle, maxRollAngle);
+  pitchPID.SetOutputLimits(-maxPIDOutput, maxPIDOutput);
+  rollPID.SetOutputLimits(-maxPIDOutput, maxPIDOutput);
 }
+
 
 //compute new pid values
 void updatePID() {
-  //pidDirection();
+  pitchInput = heading.pitch;
+  rollInput = heading.roll;
+
   pitchPID.Compute();
   rollPID.Compute();
-  if (!servoLock) {
-    adjustServos();   //only actuate servos if not locked
+
+  xAngle = map(pitchOutput, -maxPIDOutput, maxPIDOutput, minPitchAngle, maxPitchAngle);
+  yAngle = map(rollOutput, -maxPIDOutput, maxPIDOutput, minRollAngle, maxRollAngle);
+
+  if (servoLock) {
+    zeroServos();
+  } else {
+    adjustServos();
   }
 }
 
@@ -773,7 +784,7 @@ void zeroServos() {
   xServo2.write(90);
   yServo1.write(90);
   yServo2.write(90);
-  debugLog(F("Servos Zeroed"));
+  //debugLog(F("Servos Zeroed"));
 }
 
 //initialise servos
@@ -853,28 +864,24 @@ void setup() {
 
 void loop() {
   commandCheck();                           //check for serial command input
-  sensorEvent();                            //sensors update
+  simulateBurnout();                        //timer check for burnout after simulate command
+
+  sensors_event_t tempEvent, presEvent;     //sensor events for bmp
+  getBMPdata(tempEvent, presEvent);         //bmp280 sensor update
   getAccelData();                           //update mpu sensor
+
   filtAccel = filterAccel(mpuAccelGforce);  //clean acceleration
   heading = getOrientation(filtAccel);      //get orientation from filtered data
   filtAlt = filterAlt();                    //clean altitude
   velocity = calculateVelocity(filtAccel);  //check velocity
   speed = velocity.magnitude;               //find current speed
+
   updatePID();                              //update pid controller
-  flushLogs();                              //write log buffers to sd card
-  simulateBurnout();                        //simulate timer check for burnout 
-  dataLog();                                //log data to sd card
 
+  dataLog(tempEvent,presEvent);             //log data to sd card
+  flushLogs();                              //write log buffers to sd card after set timer (flushTimer = 500ms)
 
-  //DETECT APOGEE
-  if (!apogeeDetected && detectApogee(filtAlt, velocity)) {
-    flightState = FlightState::apogee;
-    apogeeTime = millis() - flightStart;
-    debugLog(F("Apogee detected! Max Altitude: "));
-    debugLog(String(maxAlt));
-    debugLog(F("Flight State --> Apogee"));
-    flushNow();
-  }
+  ifApogee();                               //check if we have reached apogee
 
   // arming state machine
   switch (armState) {
