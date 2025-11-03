@@ -22,13 +22,17 @@ Data is passed through a Kalman filter to clean noise, and PID control is used t
 
 NEED TO CONFIRM ACCEL DATA DIRECTION, IS UP POSITIVE?? WHICH WAY IS EACH HEADING DIRECTION - this will mess up apogee detect if incorrect
 
-fix bmp to mpu switch - inbcorporate gyro?
 
-FUNCTION TO REMEMBER
 
-flushNow - flush debug log to sd immediately
+incorporate gyro later?
+
+
+
+separate files for different sets of variables, eg high freq data from imu, barom - lower frequency for states
+
+
 
 could simulate via array of numbers to simulate altitudes + velocites
 
-\*/
+
 

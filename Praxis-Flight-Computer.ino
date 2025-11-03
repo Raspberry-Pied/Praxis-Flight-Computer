@@ -1,6 +1,8 @@
 /************************************************************************************************/
 /*======================= PRAXIS FLIGHT COMPUTER & STABILITY CONTROL SYSTEM ====================*/
 /************************************************************************************************/
+//debug tools
+bool debug = 1;                                 //activate for heartbeat + debugging features
 
 //PINS
 const int BUTTON_PIN = 2;
@@ -91,8 +93,6 @@ Adafruit_Sensor *bmp_pressure = bmp.getPressureSensor();
 AccelData mpuAccelRaw;
 AccelData mpuAccelGforce;
 Orientation accelOrientation;
-float accelOffsetX = 0;
-float accelOffsetY = 0;
 //calibration values for filtering accel
 float initAccelX = 0;
 float initAccelY = 0;
@@ -193,6 +193,10 @@ File logFile;
 unsigned long lastFlushTime = 0;
 const unsigned long flushInterval = 500;  // flush every 0.5s
 
+//restart sd card if failed
+unsigned long lastRestartAttempt = 0;
+const unsigned long restartCooldown = 1000; // 1 sec
+
 /*======================= COMMANDS ====================*/
 //check serial for commands
 void commandCheck() {
@@ -225,19 +229,18 @@ void commandCheck() {
 
 //simulate  - override altitude for testing?
 void simulate() {
-  detectLaunchAlt = 0;
-  detectLaunchG = 0;
   simTimer = millis();
   simulateCheck = 1;
   debugLog(F("Simulated State --> Burn"));
+  flightState = FlightState::burn;
 }
 
 //in loop to detect burnout after 3s
 void simulateBurnout()  {
   if (simulateCheck == 1 && flightState == FlightState::burn)  {
     if (millis() - simTimer >= 3000) {
-      burnoutSpeed = 0;    //burnout after 3s
       debugLog(F("Simulated State --> Coast"));
+      flightState = FlightState::coast;
       simulateCheck = 0;
       apogeeCheck = 1;
       apogeeTimer = millis();
@@ -401,8 +404,8 @@ Orientation getOrientation(AccelData filtAccel) {
 
   calculateAnglesFromAccel(filtAccel.x, filtAccel.y, filtAccel.z, pitch, roll); // uses trigonometry to calculate angles with accelerometer values    // prints mpu6050 values in the terminal
 
-  result.pitch = pitch - accelOffsetX; // adjust accelerometer values to compensate for offset values
-  result.roll = roll - accelOffsetY;
+  result.pitch = pitch - initAccelX; // adjust accelerometer values to compensate for offset values
+  result.roll = roll - initAccelY;
 
   return result;
 }
@@ -472,14 +475,23 @@ void startBarometer() {
  
 //SD card init
 void startSD()  {
-  if (!SD.begin(csPIN)) {
-    Serial.println(F("Could not find a valid SD card"));
-    while (1) delay(10); //if no valid sd card it gets stuck
+  delay(50);
+  SPI.beginTransaction(SPISettings(000000, MSBFIRST, SPI_MODE0)); // 4 MHz
+  delay(50);
+
+  while (true) {                                      //keep trying to start sd card until it works
+      if (SD.begin(csPIN)) {
+          Serial.println(F("SD Card Started"));
+          break; // SD initialized, exit loop
+      } else {
+          Serial.println(F("Could not find a valid SD card, retrying..."));
+          delay(500); // small delay to avoid spamming Serial too fast
+      }
   }
+
   if (!SD.exists("/PRAXIS/LOGS")) SD.mkdir("/PRAXIS/LOGS");
   if (!SD.exists("/PRAXIS/SUMMARY")) SD.mkdir("/PRAXIS/SUMMARY");
   if (!SD.exists("/PRAXIS/DEBUG")) SD.mkdir("/PRAXIS/DEBUG");
-  debugLog(F("SD Card Started"));
 }
 
 //initialise pins
@@ -491,69 +503,69 @@ void startPins()  {
 }
 
 /*======================= SD CARD AND LOGGING BEHAVIOUR ====================*/
-//funct to create files to write logs to - takes mode log or summary
-String createLogFile(String mode = "LOG") {
-  // --- Directory and naming configuration ---
-  const char *baseDirLogs = "/PRAXIS/LOGS/";
-  const char *baseDirSummary = "/PRAXIS/SUMMARY/";
-  const char *prefixLog = "Log_";
-  const char *prefixSummary = "Sum_";
-  const char *extension = ".txt";
+// --- Helper to create a file with headers ---
+String createFileWithHeader(const char* baseDir, const char* prefix, const char* header) {
+    // Ensure directory exists
+    if (!SD.exists(baseDir)) {
+        Serial.print(F("Directory not found, creating: "));
+        Serial.println(baseDir);
+        SD.mkdir(baseDir);
+    }
 
-  const char *baseDir;
-  const char *prefix;
+    // Find next available file number
+    int fileNum = 1;
+    String filePath;
+    while (true) {
+        filePath = String(baseDir) + prefix + String(fileNum) + ".txt";
+        if (!SD.exists(filePath.c_str())) break;
+        fileNum++;
+    }
 
-  // --- Select directory & prefix based on mode ---
-  if (mode.equalsIgnoreCase("SUMMARY")) {
-    baseDir = baseDirSummary;
-    prefix = prefixSummary;
-  } else {
-    baseDir = baseDirLogs;
-    prefix = prefixLog;
-  }
+    // Open file for writing
+    File file = SD.open(filePath.c_str(), FILE_WRITE);
+    if (!file) {
+        Serial.print(F("Error: Could not create file: "));
+        Serial.println(filePath);
+        return "";
+    }
 
-  // --- Ensure base directory exists ---
-  if (!SD.exists(baseDir)) {
-    Serial.print(F("Directory not found, creating: "));
-    Serial.println(baseDir);
-    SD.mkdir(baseDir);
-  }
+    // Write header and close
+    file.println(header);
+    file.close();
 
-  // --- Find next available file number ---
-  int fileNum = 1;
-  String filePath;
-  File testFile;
+    Serial.print(F("Created file: "));
+    Serial.println(filePath);
 
-  //recursively check incrementing values until a file doesnt exist
-  while (true) {
-    filePath = String(baseDir) + prefix + String(fileNum) + extension;
-    if (!SD.exists(filePath.c_str())) break;  // stop when file doesn’t exist
-    fileNum++;
-  }
+    return filePath;
+}
 
-  // --- Create and open the new file ---
-  File file = SD.open(filePath.c_str(), FILE_WRITE);
-  if (!file) {
-    debugLog(F("Error: Could not create file: "));
-    debugLog(String(filePath));
-    return "";
-  }
+String createLogFile() {
+    const char* baseDirLogs = "/PRAXIS/LOGS/";
+    const char* prefixLog = "Log_";
+    const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),X acceleration (m/s^2),Y acceleration (m/s^2),Z acceleration (m/s^2),Magnitude of Acceleration (m/s^2),Pitch (deg),Roll (deg),Magnitude of Velocity (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s),X Servo Target Angle (deg),Y Servo Target Angle (deg)";
+    
+    return createFileWithHeader(baseDirLogs, prefixLog, logHeader);
+}
 
-  // --- Write headers based on mode ---
-  if (mode.equalsIgnoreCase("SUMMARY")) {
-    file.println(F("Max Altitude (m),Apogee Timestamp (s),Flight Duration (s)"));
-  } else {
-    file.println(F("Temp (C),Pressure (Pa),Altitude (m),X acceleration (m/s^2),Y acceleration (m/s^2),Z acceleration (m/s^2),Magnitude of Acceleration (m/s^2),Pitch (deg),Roll (deg),Magnitude of Velocity (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s),X Servo Target Angle (deg),Y Servo Target Angle (deg)"));
-  }
+String createDebugFile() {
+    const char* baseDir = "/PRAXIS/DEBUG/";
+    const char* prefix = "Debug_";
+    const char* header = "=== DEBUG LOG START ===\nCreated new debug file:";
 
-  // --- Print confirmation ---
-  debugLog(F("Created new "));
-  debugLog(String(mode)); 
-  debugLog(F(" file: "));
-  debugLog(String(filePath));
+    String path = createFileWithHeader(baseDir, prefix, header);
 
-  flushNow();   //flush header file onto sd card
-  return filePath;
+    //Store path in a global variable
+    debugFilePath = path;
+
+    return path;
+}
+
+String createSummaryFile() {
+    const char* baseDirSummary = "/PRAXIS/SUMMARY/";
+    const char* prefixSummary = "Sum_";
+    const char* summaryHeader = "Max Altitude (m),Apogee Timestamp (s),Flight Duration (s)";
+    
+    return createFileWithHeader(baseDirSummary, prefixSummary, summaryHeader);
 }
 
 // --- Flash string overload (for F() macro) //////////////////debug log
@@ -594,27 +606,6 @@ void debugLog(String message) {
   }
 }
 
-//create debug log file
-String createDebugFile() {
-  const char *basePath = "/PRAXIS/DEBUG/";
-  const char *prefix = "Debug_";
-  const char *extension = ".txt";
-  int logNum = 1;
-
-  while (true) {
-    debugFilePath = String(basePath) + prefix + String(logNum) + extension;
-    if (!SD.exists(debugFilePath.c_str())) debugFile = SD.open(debugFilePath.c_str(), FILE_WRITE);
-    if (debugFile) {
-      debugFile.println(F("=== DEBUG LOG START ==="));
-      debugFile.print(F("Created new debug file: "));
-      debugFile.println(debugFilePath);
-      return debugFilePath;
-    }
-    logNum++;
-  }
-  debugLog(F("Debug Logging Started"));
-}
-
 //OPEN LOG FILE FOR USE
 void openLogFile()  {
   logFile = SD.open(logFilePath.c_str(), FILE_WRITE);
@@ -624,6 +615,7 @@ void openLogFile()  {
     debugLog(F("Data log file opened successfully"));
   }
 }
+
 //datalogging function
 void dataLog(sensors_event_t tempEvent,sensors_event_t presEvent)  {
   if (dataLogging) {
@@ -657,7 +649,7 @@ void dataLog(sensors_event_t tempEvent,sensors_event_t presEvent)  {
 }
 //generate summary file at end of flight
 void generateSummary()  {
-  String summaryFilePath = createLogFile("SUMMARY");
+  String summaryFilePath = createSummaryFile();
   // -> /PRAXIS/SUMMARY/Summary_2.txt
   File summaryFile = SD.open(summaryFilePath.c_str(),FILE_WRITE);
   String summaryPrint = String(maxAlt,3) + "," +
@@ -669,6 +661,7 @@ void generateSummary()  {
     debugLog(F("Summary File Written"));
   }
 }
+
 //flush log buffer to sd card
 void flushLogs()  {
   unsigned long flushTimer = millis();
@@ -678,7 +671,15 @@ void flushLogs()  {
       if (logFile) logFile.flush();
       lastFlushTime = flushTimer;
     } else {
-      debugLog(F("Warning: SD card disconnected!"));
+      if (millis() - lastRestartAttempt > restartCooldown) {  //restart sd card if not detected
+        lastRestartAttempt = millis();
+        debugLog(F("Warning: SD card disconnected, attempting to restart"));
+        if (SD.begin(csPIN)) {
+          debugLog(F("SD card restarted successfully"));
+        } else {
+          debugLog(F("SD card couldn't be started"));
+        }
+      }
     }
   }
 }
@@ -779,6 +780,7 @@ void pidDirection() {
 }
 */
 
+
 //ZERO ALL SERVOS TO INITIAL POSITION
 void zeroServos() {
   xServo1.write(90);
@@ -805,7 +807,6 @@ void systemArm()  {
   lockServos();
   zeroServos();
   cute.play(S_BUTTON_PUSHED);
-  dataLogging = true;
   debugLog(F("Datalogging Started"));
 }
 
@@ -825,7 +826,8 @@ void systemLanded() {
 //initialise on 1st button press 
 void initialise() {
   logFilePath = createLogFile();    //create log file with header
-  openLogFile();
+  openLogFile();                    //open log and start recording
+  dataLogging = true;
 
   //Read pressure anc convert to hPa
   initPres = bmp.readPressure();      
@@ -843,12 +845,39 @@ void initialise() {
   buttonTimer = millis();
   debugLog(F("System State --> Initialised")); 
 }
+//detect if rising edge of button press
+bool lastButtonState = LOW;
+void detectButton() {
+  bool currentButtonState = digitalRead(BUTTON_PIN);
 
+  // Detect rising edge
+  if (currentButtonState == HIGH && lastButtonState == LOW) {
+    if (armState == ArmState::on)  {
+      initialise();
+      unlockServos();
+    } else if (armState == ArmState::initialised && millis() - buttonTimer >= buttonDelay) {
+      systemArm();
+    }
+  }
+
+  lastButtonState = currentButtonState;
+}
+
+//print heartbeat in loop
+void heartBeat()  {
+  //heartbeat debug function
+  static unsigned long lastBeat = 0;
+  if (millis() - lastBeat > 1000) {
+    debugLog(F("[HEARTBEAT] Loop alive"));
+    lastBeat = millis();
+  }
+}
 /*======================= SETUP & LOOP ====================*/
 
 void setup() {
   Serial.begin(9600);
   startSD();
+  delay(100);
   createDebugFile();
   startBarometer();
   startAccelerometer();
@@ -861,7 +890,11 @@ void setup() {
 }
 
 
+
 void loop() {
+  if (debug == 1) heartBeat();              //heartbeat for debugging
+
+  detectButton();                           //check for button press
   commandCheck();                           //check for serial command input
   simulateBurnout();                        //timer check for burnout after simulate command
 
@@ -888,18 +921,11 @@ void loop() {
     // on - 1 hz flash, waiting for init
     case ArmState::on:
     flashLED(1000,flashTimer);
-    if (digitalRead(BUTTON_PIN) == HIGH) {
-      initialise();
-      unlockServos();
-    }
     break;
 
     //init - solid, waiting for arm
     case ArmState::initialised:
     digitalWrite(LED_PIN,HIGH);
-    if (digitalRead(BUTTON_PIN) == HIGH && millis() - buttonTimer >= buttonDelay) {
-      systemArm();
-    }
     break;
 
     case ArmState::armed:
