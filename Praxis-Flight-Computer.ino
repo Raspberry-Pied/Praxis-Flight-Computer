@@ -612,6 +612,7 @@ String createDebugFile() {
     }
     logNum++;
   }
+  debugLog(F("Debug Logging Started"));
 }
 
 //OPEN LOG FILE FOR USE
@@ -847,8 +848,6 @@ void initialise() {
 
 void setup() {
   Serial.begin(9600);
-  //startSPI();
-  //delay(200);   //allow sd to power up before responding to spi
   startSD();
   createDebugFile();
   startBarometer();
