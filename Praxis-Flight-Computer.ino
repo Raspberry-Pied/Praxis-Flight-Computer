@@ -2,7 +2,7 @@
 /*======================= PRAXIS FLIGHT COMPUTER & STABILITY CONTROL SYSTEM ====================*/
 /************************************************************************************************/
 //debug tools
-bool debug = 1;                                 //activate for heartbeat + debugging features
+bool debug = 0;                                 //activate for heartbeat + debugging features
 
 //PINS
 const int BUTTON_PIN = 2;
@@ -476,7 +476,7 @@ void startBarometer() {
 //SD card init
 void startSD()  {
   delay(50);
-  SPI.beginTransaction(SPISettings(000000, MSBFIRST, SPI_MODE0)); // 4 MHz
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0)); // 4 MHz
   delay(50);
 
   while (true) {                                      //keep trying to start sd card until it works
