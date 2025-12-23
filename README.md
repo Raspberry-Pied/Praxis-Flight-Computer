@@ -32,7 +32,9 @@ separate files for different sets of variables, eg high freq data from imu, baro
 
 
 
-could simulate via array of numbers to simulate altitudes + velocites
+could simulate via array of numbers to simulate altitudes + velocities
 
 
+
+BMP initisation issue caused by hanging i2c line - need to power cycle before each system use - implement something to fix later
 

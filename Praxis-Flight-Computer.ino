@@ -2,19 +2,19 @@
 /*======================= PRAXIS FLIGHT COMPUTER & STABILITY CONTROL SYSTEM ====================*/
 /************************************************************************************************/
 //debug tools
-bool debug = 0;                                 //activate for heartbeat + debugging features
+bool isDebug = 0;                                 //activate for heartbeat + debugging features
 
 //PINS
 const int BUTTON_PIN = 2;
-const int LED_PIN = 3;
+const int LED_PIN = 7;
 const int BUZZER_PIN = 4;
 
 const int csPIN = 10;                           //SPI chip select pin
 
 const int xServo_1_PIN = 9;
-const int xServo_2_PIN = 8;
-const int yServo_1_PIN = 7;
-const int yServo_2_PIN = 6;
+const int xServo_2_PIN = 6;
+const int yServo_1_PIN = 5;
+const int yServo_2_PIN = 3;
 
 //TIMERS
 const unsigned long logTime = 10;               // HOW OFTEN TO LOG DATA (ms) - 100 HZ
@@ -459,9 +459,12 @@ void startBuzzer()  {
 }
 //Start barometer and validate connection
 void startBarometer() {
+  Wire.begin();
+  delay(200);
   unsigned bmpStatus = bmp.begin(BMP280_ADDRESS);
   if (!bmpStatus) {
     debugLog(F("Could not find a valid BMP280 sensor"));
+    flushNow();
     while (1) delay(10);  // The code will get stuck here, instead of continuing with a bad barometer
   }
   /* Default BMP280 settings from datasheet. */
@@ -503,7 +506,7 @@ void startPins()  {
 }
 
 /*======================= SD CARD AND LOGGING BEHAVIOUR ====================*/
-// --- Helper to create a file with headers ---
+//Helper funct to create a file with headers based on input path
 String createFileWithHeader(const char* baseDir, const char* prefix, const char* header) {
     // Ensure directory exists
     if (!SD.exists(baseDir)) {
@@ -539,6 +542,7 @@ String createFileWithHeader(const char* baseDir, const char* prefix, const char*
     return filePath;
 }
 
+//creates a log file for datalogging
 String createLogFile() {
     const char* baseDirLogs = "/PRAXIS/LOGS/";
     const char* prefixLog = "Log_";
@@ -547,6 +551,7 @@ String createLogFile() {
     return createFileWithHeader(baseDirLogs, prefixLog, logHeader);
 }
 
+//creates a debug log file
 String createDebugFile() {
     const char* baseDir = "/PRAXIS/DEBUG/";
     const char* prefix = "Debug_";
@@ -560,6 +565,7 @@ String createDebugFile() {
     return path;
 }
 
+//creates a summary file for end of flight
 String createSummaryFile() {
     const char* baseDirSummary = "/PRAXIS/SUMMARY/";
     const char* prefixSummary = "Sum_";
@@ -568,7 +574,14 @@ String createSummaryFile() {
     return createFileWithHeader(baseDirSummary, prefixSummary, summaryHeader);
 }
 
-// --- Flash string overload (for F() macro) //////////////////debug log
+//open debug log for use
+void openDebugFile()  {
+  debugFile = SD.open(debugFilePath.c_str(), FILE_WRITE);
+  if (!debugFile) Serial.println(F("Error opening debug file"));
+  debugLog(F("Debug file opened for writing"));
+}
+
+//Flash string overload for F() macro - allows calling debugLog(F("String"))
 void debugLog(const __FlashStringHelper *message) {
   unsigned long t = millis();
 
@@ -587,7 +600,7 @@ void debugLog(const __FlashStringHelper *message) {
   }
 }
 
-// --- Regular String overload (for dynamic text) /////////// debug log---
+//Regular String overload for dynamic text - allows calling debugLog(variable)
 void debugLog(String message) {
   unsigned long t = millis();
 
@@ -807,7 +820,6 @@ void systemArm()  {
   lockServos();
   zeroServos();
   cute.play(S_BUTTON_PUSHED);
-  debugLog(F("Datalogging Started"));
 }
 
 //system landed calls
@@ -828,6 +840,7 @@ void initialise() {
   logFilePath = createLogFile();    //create log file with header
   openLogFile();                    //open log and start recording
   dataLogging = true;
+  debugLog(F("Datalogging Started"));
 
   //Read pressure anc convert to hPa
   initPres = bmp.readPressure();      
@@ -852,6 +865,7 @@ void detectButton() {
 
   // Detect rising edge
   if (currentButtonState == HIGH && lastButtonState == LOW) {
+    debugLog(F("Button Press Detected"));
     if (armState == ArmState::on)  {
       initialise();
       unlockServos();
@@ -865,7 +879,6 @@ void detectButton() {
 
 //print heartbeat in loop
 void heartBeat()  {
-  //heartbeat debug function
   static unsigned long lastBeat = 0;
   if (millis() - lastBeat > 1000) {
     debugLog(F("[HEARTBEAT] Loop alive"));
@@ -879,6 +892,7 @@ void setup() {
   startSD();
   delay(100);
   createDebugFile();
+  openDebugFile();
   startBarometer();
   startAccelerometer();
   startPins();
@@ -892,7 +906,7 @@ void setup() {
 
 
 void loop() {
-  if (debug == 1) heartBeat();              //heartbeat for debugging
+  if(isDebug) heartBeat();                    //heartbeat for debugging
 
   detectButton();                           //check for button press
   commandCheck();                           //check for serial command input
