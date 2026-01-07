@@ -145,7 +145,7 @@ PID pitchPID(&pitchInput, &pitchOutput, &pidPitchTarget, Kp, Ki, Kd, DIRECT);
 PID rollPID(&rollInput, &rollOutput, &pidRollTarget, Kp, Ki, Kd, DIRECT);
 
 /*======================= GLOBAL VARIABLES ====================*/
-float initPres;            //initlisation pressure
+//float initPres;            //initlisation pressure
 float groundPres;           //init pres converted to hPa
 float initAccel;            //initialistaion net acceleration
 bool dataLogging = false;   //TO TURN ON DATALOGGING
@@ -161,6 +161,7 @@ bool apogeeCheck =0;
 
 String debugFilePath;       //file path for debug logs
 String logFilePath;         //file path for log file on sd card
+String servoFilePath;       //file path for servo logs
 
 //FOR FLASHING LED
 bool ledState = 0;
@@ -190,6 +191,7 @@ bool apogeeDetected = false;           // flag
 //debug logging
 File debugFile;
 File logFile;
+File servoFile;
 unsigned long lastFlushTime = 0;
 const unsigned long flushInterval = 500;  // flush every 0.5s
 
@@ -459,7 +461,7 @@ void startBuzzer()  {
 }
 //Start barometer and validate connection
 void startBarometer() {
-  Wire.begin();
+  Wire.begin(); //test if using this fixes hung i2c bus issue
   delay(200);
   unsigned bmpStatus = bmp.begin(BMP280_ADDRESS);
   if (!bmpStatus) {
@@ -473,6 +475,7 @@ void startBarometer() {
                   Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
                   Adafruit_BMP280::FILTER_X16,      /* Filtering. */
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
+  delay(600);     //allow time for first conversion to complete
   debugLog(F("Barometer Initialised"));
 }
  
@@ -544,11 +547,20 @@ String createFileWithHeader(const char* baseDir, const char* prefix, const char*
 
 //creates a log file for datalogging
 String createLogFile() {
-    const char* baseDirLogs = "/PRAXIS/LOGS/";
-    const char* prefixLog = "Log_";
-    const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),X acceleration (m/s^2),Y acceleration (m/s^2),Z acceleration (m/s^2),Magnitude of Acceleration (m/s^2),Pitch (deg),Roll (deg),Magnitude of Velocity (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s),X Servo Target Angle (deg),Y Servo Target Angle (deg)";
+  const char* baseDirLogs = "/PRAXIS/LOGS/";
+  const char* prefixLog = "Sens_";
+  const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),Raw X Accel,Raw Y Accel,Raw Z Accel,Filt X Accel,Filt Y Accel,Filt Z Accel,Magnitude of Acceleration (m/s^2),Magnitude of Velocity (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)";
     
-    return createFileWithHeader(baseDirLogs, prefixLog, logHeader);
+  return createFileWithHeader(baseDirLogs, prefixLog, logHeader);
+}
+
+//Create a servo log file
+String createServoFile()  {
+  const char* baseDirServo = "/PRAXIS/LOGS/";
+  const char* prefixServo = "Servo_";
+  const char* servoHeader = "Pitch,Roll,Yaw,X Servo Target Angle (deg),Y Servo Target Angle (deg)";
+
+  return createFileWithHeader(baseDirServo, prefixServo, servoHeader);
 }
 
 //creates a debug log file
@@ -629,6 +641,16 @@ void openLogFile()  {
   }
 }
 
+//open servo log file
+void openServoFile()  {
+  servoFile = SD.open(servoFilePath.c_str(), FILE_WRITE);
+  if (!servoFile) {
+    debugLog(F("Error opening servo log file"));
+  } else {
+    debugLog(F("Servo log file opened successfully"));
+  }
+}
+
 //datalogging function
 void dataLog(sensors_event_t tempEvent,sensors_event_t presEvent)  {
   if (dataLogging) {
@@ -639,23 +661,30 @@ void dataLog(sensors_event_t tempEvent,sensors_event_t presEvent)  {
         String csvLog = String(tempEvent.temperature) + "," +
                         String(presEvent.pressure) + "," +
                         String(filtAlt) + "," +
+                        String(mpuAccelRaw.x) + "," +
+                        String(mpuAccelRaw.y) + "," +
+                        String(mpuAccelRaw.z) + "," +
                         String(filtAccel.x) + "," + 
                         String(filtAccel.y) + "," +
                         String(filtAccel.z) + "," +
                         String(filtAccel.magnitude) + "," +
-                        String(heading.pitch) + "," +
-                        String(heading.roll) + "," +
                         String(speed) + "," +
                         String(velocity.x) + "," +
                         String(velocity.y) + "," +
-                        String(velocity.z) + "," +
+                        String(velocity.z);
+
+        logFile.println(csvLog);
+      } else debugLog(F("Error Logging Sensor Data"));
+
+      if (servoFile)  {
+        String csvLog = String(heading.pitch) + "," +
+                        String(heading.roll) + "," +
                         String(xAngle) + "," +
                         String(yAngle);
 
-        logFile.println(csvLog);
-      } else {
-        debugLog(F("Error Logging Data"));
-      }
+        servoFile.println(csvLog);
+      } else debugLog(F("Error Logging Servo Data"));
+
       dataTimer = millis();
     }
   }
@@ -839,12 +868,23 @@ void systemLanded() {
 void initialise() {
   logFilePath = createLogFile();    //create log file with header
   openLogFile();                    //open log and start recording
+
+  servoFilePath = createServoFile();
+  openServoFile();
+
   dataLogging = true;
   debugLog(F("Datalogging Started"));
 
-  //Read pressure anc convert to hPa
+  /*read pressure anc convert to hPa
   initPres = bmp.readPressure();      
-  groundPres = initPres / 100.0;        
+  groundPres = initPres / 100.0;  
+  */   
+
+  //use the same sensor framework to not break things:
+  sensors_event_t groundInit;
+  bmp_pressure->getEvent(&groundInit);
+  groundPres = groundInit.pressure;   // already in hPa
+   
 
   //read net accel and calculate launch accel
   initAccel = filtAccel.magnitude;   
