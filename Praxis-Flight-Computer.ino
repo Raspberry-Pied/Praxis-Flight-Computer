@@ -41,6 +41,17 @@ float q     = 0.01;                             // Process noise
 float noiseThresh = 0.2;                        //noise removal threshold for kalman filter
 
 /*======================= STRUCTS & ENUMS ====================*/
+//unified sensor struct
+struct SensorData {
+  float timeSec;
+  float tempC;
+  float pressure_hPa;
+  float altitude;
+  float accel[3];
+  float gyro[3];
+};
+SensorData rawData;
+
 //NET ACCELERATION CALCULATION
 struct AccelData {
   float x,y,z;
@@ -65,6 +76,7 @@ struct Velocity {
 };
 Velocity velocity = {0, 0, 0, 0};   //velocity
 
+
 //ARMING STATE MACHINE
 enum class ArmState {on,initialised,armed,locked};
 ArmState armState = ArmState::on;
@@ -72,6 +84,12 @@ ArmState armState = ArmState::on;
 //FLIGHT STATE MACHINE
 enum class FlightState {ground,burn,coast,apogee,descent,landed};
 FlightState flightState = FlightState::ground;
+
+//bmp state machine - ensures bmp isnt called while processing
+enum BMPState {
+  BMP_IDLE,
+  BMP_CONVERTING
+};
 
 /*======================= LIBRARIES ====================*/
 //SD card
@@ -83,13 +101,12 @@ FlightState flightState = FlightState::ground;
 #include <Adafruit_BMP280.h>
 #define BMP280_ADDRESS 0x76                //I2C ADDRESS
 Adafruit_BMP280 bmp; 
-Adafruit_Sensor *bmp_temp = bmp.getTemperatureSensor();   //pointers for getting bmp data
-Adafruit_Sensor *bmp_pressure = bmp.getPressureSensor();
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // MPU6050 3-axis accelerometer and gyro
 #include <mpu6050.h>
 #define MPU_ADDRESS 0x68  // AD0 pin tied to GND
+
 AccelData mpuAccelRaw;
 AccelData mpuAccelGforce;
 Orientation accelOrientation;
@@ -199,56 +216,8 @@ const unsigned long flushInterval = 500;  // flush every 0.5s
 unsigned long lastRestartAttempt = 0;
 const unsigned long restartCooldown = 1000; // 1 sec
 
-/*======================= COMMANDS ====================*/
-//check serial for commands
-void commandCheck() {
-  if (Serial.available()) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
-    if (command.equalsIgnoreCase("simulate")) {       ///simulate command - starts launch sequence
-      debugLog(F("Simulate command received"));
-      simulate();   
-    }
-    if (command.equalsIgnoreCase("apogee")) {       //apogee cmd - only triggers after simulate
-      if (!simulateCheck) {
-        debugLog(F("Apogee command not accepted - simulate not triggered"));
-      } else  {
-        if (millis() - simTimer >= 5000) {
-          debugLog(F("Apogee command accepted"));
-          flightState = FlightState::apogee;
-          debugLog(F("Simulated State --> Apogee"));
-        }
-      }
-    }
-    if (command.equalsIgnoreCase("landed")) {       ///simulate command - starts launch sequence
-      debugLog(F("Landed command received"));
-      flightState = FlightState::landed;
-      landTimer = millis();
-      debugLog(F("Simulated State --> Landed"));
-    }
-  }
-}
+unsigned long lastBMPTrigger = 0;
 
-//simulate  - override altitude for testing?
-void simulate() {
-  simTimer = millis();
-  simulateCheck = 1;
-  debugLog(F("Simulated State --> Burn"));
-  flightState = FlightState::burn;
-}
-
-//in loop to detect burnout after 3s
-void simulateBurnout()  {
-  if (simulateCheck == 1 && flightState == FlightState::burn)  {
-    if (millis() - simTimer >= 3000) {
-      debugLog(F("Simulated State --> Coast"));
-      flightState = FlightState::coast;
-      simulateCheck = 0;
-      apogeeCheck = 1;
-      apogeeTimer = millis();
-    }
-  }
-} 
 
 /*======================= MISC OUTPUTS ====================*/
 // continuous buzzer beeps for when armed 
@@ -266,7 +235,7 @@ void flashLED(unsigned long flashDelay,unsigned long &flashTimer) {
     flashTimer = millis();
   }
 }
-/*======================= APOGEE / VELOCITY / BMP FILTERING ====================*/
+/*======================= APOGEE / VELOCITY / CALCULATIONS ====================*/
 //detect apogee
 bool detectApogee(float filtAlt,Velocity velocity) {
   float verticalVelocity = velocity.z;    //vertical velocity component
@@ -336,26 +305,12 @@ Velocity calculateVelocity(AccelData filtAccel) {
   return velocity;
 }
 
-//update sensors
-void getBMPdata(sensors_event_t &tempEvent, sensors_event_t &presEvent)  {
-  bmp_temp->getEvent(&tempEvent);
-  bmp_pressure->getEvent(&presEvent);
-  //tempEvent.temperature :call using:
-  //pressEvent.pressure
-}
-
 //kalman filter altitude
 float filterAlt() {
-  return pressureKalmanFilter.updateEstimate(bmp.readAltitude(groundPres));
+  return pressureKalmanFilter.updateEstimate(rawData.altitude);
 }
 
 /*======================= MPU DATA AND FILTERING + ORIENTATION DETECTION ====================*/
-//start accelerometer and validate connection
-void startAccelerometer() {
-  wakeSensor(MPU_ADDRESS); // wakes sensor from sleep mode
-  delay(200);
-  debugLog(F("Accelerometer Initialised"));
-}
 
 //calibrate acceleration values for kalman filtering
 void calibrateAccel() {
@@ -452,52 +407,13 @@ AccelData filterAccel(AccelData mpuAccelGforce) {
 
   return result;
 }
+
 /*======================= INITIALISATIONS ====================*/
 //BUZZER INITIALISE
 void startBuzzer()  {
   cute.init(BUZZER_PIN);
   cute.play(S_CONNECTION);
   debugLog(F("Buzzer Initialised"));
-}
-//Start barometer and validate connection
-void startBarometer() {
-  Wire.begin(); //test if using this fixes hung i2c bus issue
-  delay(200);
-  unsigned bmpStatus = bmp.begin(BMP280_ADDRESS);
-  if (!bmpStatus) {
-    debugLog(F("Could not find a valid BMP280 sensor"));
-    flushNow();
-    while (1) delay(10);  // The code will get stuck here, instead of continuing with a bad barometer
-  }
-  /* Default BMP280 settings from datasheet. */
-  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
-                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
-                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
-                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
-  delay(600);     //allow time for first conversion to complete
-  debugLog(F("Barometer Initialised"));
-}
- 
-//SD card init
-void startSD()  {
-  delay(50);
-  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0)); // 4 MHz
-  delay(50);
-
-  while (true) {                                      //keep trying to start sd card until it works
-      if (SD.begin(csPIN)) {
-          Serial.println(F("SD Card Started"));
-          break; // SD initialized, exit loop
-      } else {
-          Serial.println(F("Could not find a valid SD card, retrying..."));
-          delay(500); // small delay to avoid spamming Serial too fast
-      }
-  }
-
-  if (!SD.exists("/PRAXIS/LOGS")) SD.mkdir("/PRAXIS/LOGS");
-  if (!SD.exists("/PRAXIS/SUMMARY")) SD.mkdir("/PRAXIS/SUMMARY");
-  if (!SD.exists("/PRAXIS/DEBUG")) SD.mkdir("/PRAXIS/DEBUG");
 }
 
 //initialise pins
@@ -506,339 +422,6 @@ void startPins()  {
   pinMode(BUTTON_PIN,INPUT);
   pinMode(BUZZER_PIN,OUTPUT);
   debugLog(F("Pins Initialised"));
-}
-
-/*======================= SD CARD AND LOGGING BEHAVIOUR ====================*/
-//Helper funct to create a file with headers based on input path
-String createFileWithHeader(const char* baseDir, const char* prefix, const char* header) {
-    // Ensure directory exists
-    if (!SD.exists(baseDir)) {
-        Serial.print(F("Directory not found, creating: "));
-        Serial.println(baseDir);
-        SD.mkdir(baseDir);
-    }
-
-    // Find next available file number
-    int fileNum = 1;
-    String filePath;
-    while (true) {
-        filePath = String(baseDir) + prefix + String(fileNum) + ".txt";
-        if (!SD.exists(filePath.c_str())) break;
-        fileNum++;
-    }
-
-    // Open file for writing
-    File file = SD.open(filePath.c_str(), FILE_WRITE);
-    if (!file) {
-        Serial.print(F("Error: Could not create file: "));
-        Serial.println(filePath);
-        return "";
-    }
-
-    // Write header and close
-    file.println(header);
-    file.close();
-
-    Serial.print(F("Created file: "));
-    Serial.println(filePath);
-
-    return filePath;
-}
-
-//creates a log file for datalogging
-String createLogFile() {
-  const char* baseDirLogs = "/PRAXIS/LOGS/";
-  const char* prefixLog = "Sens_";
-  const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),Raw X Accel,Raw Y Accel,Raw Z Accel,Filt X Accel,Filt Y Accel,Filt Z Accel,Magnitude of Acceleration (m/s^2),Magnitude of Velocity (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)";
-    
-  return createFileWithHeader(baseDirLogs, prefixLog, logHeader);
-}
-
-//Create a servo log file
-String createServoFile()  {
-  const char* baseDirServo = "/PRAXIS/LOGS/";
-  const char* prefixServo = "Servo_";
-  const char* servoHeader = "Pitch,Roll,Yaw,X Servo Target Angle (deg),Y Servo Target Angle (deg)";
-
-  return createFileWithHeader(baseDirServo, prefixServo, servoHeader);
-}
-
-//creates a debug log file
-String createDebugFile() {
-    const char* baseDir = "/PRAXIS/DEBUG/";
-    const char* prefix = "Debug_";
-    const char* header = "=== DEBUG LOG START ===\nCreated new debug file:";
-
-    String path = createFileWithHeader(baseDir, prefix, header);
-
-    //Store path in a global variable
-    debugFilePath = path;
-
-    return path;
-}
-
-//creates a summary file for end of flight
-String createSummaryFile() {
-    const char* baseDirSummary = "/PRAXIS/SUMMARY/";
-    const char* prefixSummary = "Sum_";
-    const char* summaryHeader = "Max Altitude (m),Apogee Timestamp (s),Flight Duration (s)";
-    
-    return createFileWithHeader(baseDirSummary, prefixSummary, summaryHeader);
-}
-
-//open debug log for use
-void openDebugFile()  {
-  debugFile = SD.open(debugFilePath.c_str(), FILE_WRITE);
-  if (!debugFile) Serial.println(F("Error opening debug file"));
-  debugLog(F("Debug file opened for writing"));
-}
-
-//Flash string overload for F() macro - allows calling debugLog(F("String"))
-void debugLog(const __FlashStringHelper *message) {
-  unsigned long t = millis();
-
-  // Print to serial
-  Serial.print(F("["));
-  Serial.print(t);
-  Serial.print(F(" ms] "));
-  Serial.println(message);
-
-  // Also write to SD card (if available)
-  if (debugFile) {
-    debugFile.print("[");
-    debugFile.print(t);
-    debugFile.print(" ms] ");
-    debugFile.println(message);
-  }
-}
-
-//Regular String overload for dynamic text - allows calling debugLog(variable)
-void debugLog(String message) {
-  unsigned long t = millis();
-
-  // Print to serial
-  Serial.print("[");
-  Serial.print(t);
-  Serial.print(" ms] ");
-  Serial.println(message);
-
-  // Also write to SD card (if available)
-  if (debugFile) {
-    debugFile.print("[");
-    debugFile.print(t);
-    debugFile.print(" ms] ");
-    debugFile.println(message);
-  }
-}
-
-//OPEN LOG FILE FOR USE
-void openLogFile()  {
-  logFile = SD.open(logFilePath.c_str(), FILE_WRITE);
-  if (!logFile) {
-    debugLog(F("Error opening data log file"));
-  } else {
-    debugLog(F("Data log file opened successfully"));
-  }
-}
-
-//open servo log file
-void openServoFile()  {
-  servoFile = SD.open(servoFilePath.c_str(), FILE_WRITE);
-  if (!servoFile) {
-    debugLog(F("Error opening servo log file"));
-  } else {
-    debugLog(F("Servo log file opened successfully"));
-  }
-}
-
-//datalogging function
-void dataLog(sensors_event_t tempEvent,sensors_event_t presEvent)  {
-  if (dataLogging) {
-    if (millis()-dataTimer>=logTime)  {
-
-      //write results to sd in csv format
-      if (logFile)  {
-        String csvLog = String(tempEvent.temperature) + "," +
-                        String(presEvent.pressure) + "," +
-                        String(filtAlt) + "," +
-                        String(mpuAccelRaw.x) + "," +
-                        String(mpuAccelRaw.y) + "," +
-                        String(mpuAccelRaw.z) + "," +
-                        String(filtAccel.x) + "," + 
-                        String(filtAccel.y) + "," +
-                        String(filtAccel.z) + "," +
-                        String(filtAccel.magnitude) + "," +
-                        String(speed) + "," +
-                        String(velocity.x) + "," +
-                        String(velocity.y) + "," +
-                        String(velocity.z);
-
-        logFile.println(csvLog);
-      } else debugLog(F("Error Logging Sensor Data"));
-
-      if (servoFile)  {
-        String csvLog = String(heading.pitch) + "," +
-                        String(heading.roll) + "," +
-                        String(xAngle) + "," +
-                        String(yAngle);
-
-        servoFile.println(csvLog);
-      } else debugLog(F("Error Logging Servo Data"));
-
-      dataTimer = millis();
-    }
-  }
-}
-//generate summary file at end of flight
-void generateSummary()  {
-  String summaryFilePath = createSummaryFile();
-  // -> /PRAXIS/SUMMARY/Summary_2.txt
-  File summaryFile = SD.open(summaryFilePath.c_str(),FILE_WRITE);
-  String summaryPrint = String(maxAlt,3) + "," +
-                        String(apogeeTime / 1000,3) + "," +
-                        String((millis() - flightStart) / 1000,3);
-  if (summaryFile)  {
-    summaryFile.println(summaryPrint);
-    summaryFile.close();
-    debugLog(F("Summary File Written"));
-  }
-}
-
-//flush log buffer to sd card
-void flushLogs()  {
-  unsigned long flushTimer = millis();
-  if (flushTimer - lastFlushTime >= flushInterval) {
-    if (SD.exists("/PRAXIS"))  {
-      if (debugFile) debugFile.flush();
-      if (logFile) logFile.flush();
-      lastFlushTime = flushTimer;
-    } else {
-      if (millis() - lastRestartAttempt > restartCooldown) {  //restart sd card if not detected
-        lastRestartAttempt = millis();
-        debugLog(F("Warning: SD card disconnected, attempting to restart"));
-        if (SD.begin(csPIN)) {
-          debugLog(F("SD card restarted successfully"));
-        } else {
-          debugLog(F("SD card couldn't be started"));
-        }
-      }
-    }
-  }
-}
-
-//flush debug logs immediately if required
-void flushNow() {
-  if (debugFile) debugFile.flush();
-  if (logFile) logFile.flush();
-  lastFlushTime = millis();
-}
-
-//end debug logs
-void endLogging() {
-  if (logFile)  {
-    debugLog(F("Data Log file closing"));
-    logFile.flush();
-    logFile.close();
-  }
-  if (debugFile) {
-    debugLog(F("Debug Log file closing"));
-    debugFile.flush();
-    debugFile.close();
-  }
-}
-/*======================= PID CLOSED LOOP CONTROL & SERVO BEHAVIOURS ====================*/
-
-void lockServos() {
-  servoLock = 1;
-  debugLog(F("Servos Locked"));
-}
-
-void unlockServos() {
-  servoLock = 0;
-  debugLog(F("Servos Unlocked"));
-}
-
-//Move mirrored X servos - ONLY MOVE IF ANGLE CHANGE > 1 DEG
-void moveXservos(int xAngle)  {
-  static int lastX = 90;  // start neutral; persists between calls
-  const int servoDeadband = 1; // degrees threshold to avoid jitter
-
-  if (abs(lastX - xAngle) > servoDeadband) {
-    xServo1.write(xAngle);
-    xServo2.write(180 - xAngle);  // mirrored
-    lastX = xAngle;
-  }
-}
-
-//Move mirrored Y servos
-void moveYservos(int yAngle)  {
-  static int lastY = 90;  // start neutral; persists between calls
-  const int servoDeadband = 1; // degrees threshold to avoid jitter
-
-  if (abs(lastY - yAngle) > servoDeadband) {
-    yServo1.write(yAngle);
-    yServo2.write(180 - yAngle);  // mirrored
-    lastY = yAngle;
-  }
-}
-
-//start pid controllers and output limits
-void startPID() {
-  pitchPID.SetMode(AUTOMATIC);
-  rollPID.SetMode(AUTOMATIC);
-  pitchPID.SetOutputLimits(-maxPIDOutput, maxPIDOutput);
-  rollPID.SetOutputLimits(-maxPIDOutput, maxPIDOutput);
-}
-
-
-//compute new pid values
-void updatePID() {
-  pitchInput = heading.pitch;
-  rollInput = heading.roll;
-
-  pitchPID.Compute();
-  rollPID.Compute();
-
-  xAngle = map(pitchOutput, -maxPIDOutput, maxPIDOutput, minPitchAngle, maxPitchAngle);
-  yAngle = map(rollOutput, -maxPIDOutput, maxPIDOutput, minRollAngle, maxRollAngle);
-
-  if (servoLock) {
-    zeroServos();
-  } else {
-    adjustServos();
-  }
-}
-
-//adjust servos to pid values
-void adjustServos() {
-  moveXservos(xAngle);
-  moveYservos(yAngle); 
-}
-
-/* MAY NEED TO FLIP THIS DEPENDING ON INPUT - NEEDS TESTING
-void pidDirection() {
-  pitchPID.SetControllerDirection(pitchDirection); 
-  rollPID.SetControllerDirection(rollDirection); 
-}
-*/
-
-
-//ZERO ALL SERVOS TO INITIAL POSITION
-void zeroServos() {
-  xServo1.write(90);
-  xServo2.write(90);
-  yServo1.write(90);
-  yServo2.write(90);
-  //debugLog(F("Servos Zeroed"));
-}
-
-//initialise servos
-void startServos()  {
-  xServo1.attach(xServo_1_PIN);
-  xServo2.attach(xServo_2_PIN);
-  yServo1.attach(yServo_1_PIN);
-  yServo2.attach(yServo_2_PIN);
-  debugLog(F("Servos Initialised"));
 }
 
 /*======================= TIMED CALLS ====================*/
@@ -868,23 +451,10 @@ void systemLanded() {
 void initialise() {
   logFilePath = createLogFile();    //create log file with header
   openLogFile();                    //open log and start recording
-
-  servoFilePath = createServoFile();
+  servoFilePath = createServoFile();  //create servo log file
   openServoFile();
-
   dataLogging = true;
   debugLog(F("Datalogging Started"));
-
-  /*read pressure anc convert to hPa
-  initPres = bmp.readPressure();      
-  groundPres = initPres / 100.0;  
-  */   
-
-  //use the same sensor framework to not break things:
-  sensors_event_t groundInit;
-  bmp_pressure->getEvent(&groundInit);
-  groundPres = groundInit.pressure;   // already in hPa
-   
 
   //read net accel and calculate launch accel
   initAccel = filtAccel.magnitude;   
@@ -898,6 +468,7 @@ void initialise() {
   buttonTimer = millis();
   debugLog(F("System State --> Initialised")); 
 }
+
 //detect if rising edge of button press
 bool lastButtonState = LOW;
 void detectButton() {
@@ -925,7 +496,7 @@ void heartBeat()  {
     lastBeat = millis();
   }
 }
-/*======================= SETUP & LOOP ====================*/
+/*================================================== SETUP & LOOP ===================================================*/
 
 void setup() {
   Serial.begin(9600);
@@ -943,8 +514,7 @@ void setup() {
   debugLog(F("System State --> On"));
 }
 
-
-
+//loop
 void loop() {
   if(isDebug) heartBeat();                    //heartbeat for debugging
 
@@ -952,94 +522,29 @@ void loop() {
   commandCheck();                           //check for serial command input
   simulateBurnout();                        //timer check for burnout after simulate command
 
-  sensors_event_t tempEvent, presEvent;     //sensor events for bmp
-  getBMPdata(tempEvent, presEvent);         //bmp280 sensor update
+  //read bmp data at set speed
+  if (millis() - lastBMPTrigger >= logTime) {
+    lastBMPTrigger = millis();
+    updateBMP(rawData);
+  }
+  //read altitude
+  filtAlt = filterAlt();                    //clean altitude
+
   getAccelData();                           //update mpu sensor
 
   filtAccel = filterAccel(mpuAccelGforce);  //clean acceleration
   heading = getOrientation(filtAccel);      //get orientation from filtered data
-  filtAlt = filterAlt();                    //clean altitude
   velocity = calculateVelocity(filtAccel);  //check velocity
   speed = velocity.magnitude;               //find current speed
 
   updatePID();                              //update pid controller
 
-  dataLog(tempEvent,presEvent);             //log data to sd card
+  dataLog();                                //log data to sd card
   flushLogs();                              //write log buffers to sd card after set timer (flushTimer = 500ms)
 
   ifApogee();                               //check if we have reached apogee
 
-  // arming state machine
-  switch (armState) {
+  checkArmState();    //arming state machine for light & sound display
 
-    // on - 1 hz flash, waiting for init
-    case ArmState::on:
-    flashLED(1000,flashTimer);
-    break;
-
-    //init - solid, waiting for arm
-    case ArmState::initialised:
-    digitalWrite(LED_PIN,HIGH);
-    break;
-
-    case ArmState::armed:
-    flashLED(100,flashTimer);
-    armBuzzer(buzzerTimer);
-    break;
-
-    case ArmState::locked:
-    digitalWrite(LED_PIN,HIGH);
-    break;
-
-  }
-
-  // flight state machine - only activate if armed
-  if (armState == ArmState::armed)  {
-    switch (flightState)  {
-
-      case FlightState::ground:
-      if (filtAlt >= detectLaunchAlt && filtAccel.magnitude >= detectLaunchAccel)  {
-        flightState = FlightState::burn;
-        flightStart = millis();
-        debugLog(F("Flight State --> Burn"));
-      }
-      break;
-
-      case FlightState::burn:
-      if (filtAccel.magnitude <= initAccel * burnoutSpeed)  { //////DETECT MOTOR BURNOUT
-        flightState = FlightState::coast;
-        debugLog(F("Flight State --> Coast"));
-        unlockServos();
-      }
-      break;
-
-      case FlightState::coast:
-      break;
-
-      case FlightState::apogee:
-      //CAN ADD EXTRA STUFF LATER, EJECTION CHARGES ETC
-      flightState = FlightState::descent;
-      debugLog(F("Flight State --> Descent"));
-      lockServos();
-      zeroServos();
-      break;
-
-      case FlightState::descent:
-      if (filtAlt <= detectLandAlt && speed <= detectLandSpeed) {
-        landTimer = millis();
-        flightState = FlightState::landed;
-        debugLog(F("Flight State --> Landed"));
-      }
-      break;
-
-      case FlightState::landed:
-      if (!ended) {
-        if (millis() - landTimer >= stopDelay) {
-          systemLanded();
-        }
-      }
-      break;
-      
-    }
-  }
+  checkFlightState();   //flight state machine
 }
