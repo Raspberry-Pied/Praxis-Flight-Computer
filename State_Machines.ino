@@ -4,7 +4,7 @@ void checkFlightState() {
     switch (flightState)  {
 
       case FlightState::ground:
-      if (filtAlt >= detectLaunchAlt && filtAccel.magnitude >= detectLaunchAccel)  {
+      if (filterData.altitude >= detectLaunchAlt) { //&& filtAccel.magnitude >= detectLaunchAccel)  {
         flightState = FlightState::burn;
         flightStart = millis();
         debugLog(F("Flight State --> Burn"));
@@ -12,7 +12,7 @@ void checkFlightState() {
       break;
 
       case FlightState::burn:
-      if (filtAccel.magnitude <= initAccel * burnoutSpeed)  { //////DETECT MOTOR BURNOUT
+      if (!ended) { //(filtAccel.magnitude <= initAccel * burnoutSpeed)  { //////DETECT MOTOR BURNOUT
         flightState = FlightState::coast;
         debugLog(F("Flight State --> Coast"));
         unlockServos();
@@ -31,7 +31,7 @@ void checkFlightState() {
       break;
 
       case FlightState::descent:
-      if (filtAlt <= detectLandAlt && speed <= detectLandSpeed) {
+      if (filterData.altitude <= detectLandAlt) { // && speed <= detectLandSpeed) {
         landTimer = millis();
         flightState = FlightState::landed;
         debugLog(F("Flight State --> Landed"));

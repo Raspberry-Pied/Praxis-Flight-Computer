@@ -1,4 +1,12 @@
 /*======================= SD CARD AND LOGGING BEHAVIOUR ====================*/
+
+//debug logging
+File debugFile;
+File logFile;
+File servoFile;
+unsigned long lastFlushTime = 0;
+const unsigned long flushInterval = 500;  // flush every 0.5s
+
 //SD card init
 void startSD()  {
   delay(50);
@@ -60,7 +68,7 @@ String createFileWithHeader(const char* baseDir, const char* prefix, const char*
 String createLogFile() {
   const char* baseDirLogs = "/PRAXIS/LOGS/";
   const char* prefixLog = "Sens_";
-  const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),Raw X Accel,Raw Y Accel,Raw Z Accel,Filt X Accel,Filt Y Accel,Filt Z Accel,Magnitude of Acceleration (m/s^2),Magnitude of Velocity (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)";
+  const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),X Accel,Y Accel,Z Accel,X Gyro,Y Gyro,Z Gyro,Speed (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)";
     
   return createFileWithHeader(baseDirLogs, prefixLog, logHeader);
 }
@@ -172,21 +180,20 @@ void dataLog()  {
         String csvLog = String(rawData.tempC) + "," +
                         String(rawData.pressure_hPa) + "," +
                         String(rawData.altitude) + "," +
-                        String(mpuAccelRaw.x) + "," +
-                        String(mpuAccelRaw.y) + "," +
-                        String(mpuAccelRaw.z) + "," +
-                        String(filtAccel.x) + "," + 
-                        String(filtAccel.y) + "," +
-                        String(filtAccel.z) + "," +
-                        String(filtAccel.magnitude) + "," +
-                        String(speed) + "," +
+                        String(rawData.accel[0]) + "," +
+                        String(rawData.accel[1]) + "," +
+                        String(rawData.accel[2]) + "," +
+                        String(rawData.gyro[0]) + "," +
+                        String(rawData.gyro[1]) + "," +
+                        String(rawData.gyro[2]) + "," +
+                        String(velocity.magnitude) + "," +
                         String(velocity.x) + "," +
                         String(velocity.y) + "," +
                         String(velocity.z);
 
         logFile.println(csvLog);
       } else debugLog(F("Error Logging Sensor Data"));
-
+/*
       if (servoFile)  {
         String csvLog = String(heading.pitch) + "," +
                         String(heading.roll) + "," +
@@ -195,7 +202,7 @@ void dataLog()  {
 
         servoFile.println(csvLog);
       } else debugLog(F("Error Logging Servo Data"));
-
+*/
       dataTimer = millis();
     }
   }

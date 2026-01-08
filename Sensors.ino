@@ -1,6 +1,17 @@
 #define SDA_PIN  SDA
 #define SCL_PIN  SCL
 
+// MPU6050 3-axis accelerometer and gyro
+#include <mpu6050.h>
+#define MPU_ADDRESS 0x68  // AD0 pin tied to GND
+
+//BMP280 barometer
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
+#define BMP280_ADDRESS 0x76                //I2C ADDRESS
+Adafruit_BMP280 bmp; 
+
+//manually resets i2c bus on start to fix hung bus issue 
 void recoverI2CBus() {
   // Release both lines
   pinMode(SDA_PIN, INPUT_PULLUP);
@@ -31,13 +42,12 @@ void recoverI2CBus() {
   // Return control to I2C hardware
   pinMode(SDA_PIN, INPUT_PULLUP);
   pinMode(SCL_PIN, INPUT_PULLUP);
+
+  debugLog(F("I2C Bus reset"));
 }
 
 //Start barometer and validate connection
 bool startBarometer() {
-  recoverI2CBus();
-  Wire.begin(); //test if using this fixes hung i2c bus issue
-  delay(10);
 
   if (!bmp.begin(BMP280_ADDRESS)) {
     debugLog(F("Could not find a valid BMP280 sensor"));
@@ -58,7 +68,9 @@ bool startBarometer() {
   bmp.takeForcedMeasurement();    //initialise ground pressure for altitude calcs
   groundPres = bmp.readPressure() / 100.0;
 
-  debugLog(F("Barometer Initialised in FORCED mode"));
+  debugLog(F("Barometer Initialised"));
+  debugLog(F("Ground Pressure:"));
+  debugLog(String(groundPres));
   return true;
 }
 
@@ -69,46 +81,79 @@ void startAccelerometer() {
   debugLog(F("Accelerometer Initialised"));
 }
 
-BMPState bmpState = BMP_IDLE;
-unsigned long bmpStartTime = 0;
-
-const unsigned long BMP_CONVERSION_TIME_MS = 40;
-
 //update bmp sensor
-bool updateBMP(SensorData &d)  {
-  switch (bmpState) {
-
-    case BMP_IDLE:
-      // Start a new measurement
-      if (!bmp.takeForcedMeasurement()) {
-        return false;  // I2C error
-      }
-
-      bmpStartTime = millis();
-      bmpState = BMP_CONVERTING;
-      return false;   // not ready yet
-
-    case BMP_CONVERTING:
-      // Check if conversion is finished
-      if (millis() - bmpStartTime < BMP_CONVERSION_TIME_MS) {
-        return false; // still converting
-      }
-
-      // Read results
-      float tempC = bmp.readTemperature();
-      float pressure_hPa = bmp.readPressure() / 100.0;
-
-      // Compute altitude from pressure (no extra I2C read)
-      float altitude_m = 44330.0 * (1.0 - pow((pressure_hPa / groundPres), 0.1903));
-
-      //update struct
-      d.tempC = tempC;
-      d.pressure_hPa = pressure_hPa;
-      d.altitude = altitude_m;
-
-      bmpState = BMP_IDLE;
-      return true;    // new data available
+void updateBMP(SensorData &d)  {
+  if (!bmp.takeForcedMeasurement()) {
+   return;  // I2C error
   }
 
-  return false; // should never happen
+  float tempC = bmp.readTemperature();
+  float pressure_hPa = bmp.readPressure() / 100.0;
+
+  // Compute altitude from pressure (no extra I2C read)
+  float altitude_m = 44330.0 * (1.0 - pow((pressure_hPa / groundPres), 0.1903));
+
+  //update struct
+  d.tempC = tempC;
+  d.pressure_hPa = pressure_hPa;
+  d.altitude = altitude_m;
+}
+
+float unprocessedGyro[3];
+float preprocessedGyro[3];
+float gyroBiasX = 0;
+float gyroBiasY = 0;
+float gyroBiasZ = 0;
+
+//calibrate gyro data to remove chip bias
+void calibrateGyro() {
+  const int samples = 1500;
+
+  gyroBiasX = 0;
+  gyroBiasY = 0;
+  gyroBiasZ = 0;
+
+  for (int i = 0; i < samples; i++) {
+    readGyroData(MPU_ADDRESS, unprocessedGyro[0], unprocessedGyro[1], unprocessedGyro[2]);
+    rawGyroToDPS(unprocessedGyro[0], unprocessedGyro[1], unprocessedGyro[2], preprocessedGyro[0], preprocessedGyro[1], preprocessedGyro[2]);
+
+    gyroBiasX += preprocessedGyro[0];
+    gyroBiasY += preprocessedGyro[1];
+    gyroBiasZ += preprocessedGyro[2];
+
+    delay(2);
+  }
+
+  gyroBiasX /= samples;
+  gyroBiasY /= samples;
+  gyroBiasZ /= samples;
+
+  debugLog(F("Gyro calibration complete, initial biases (x,y,z):"));
+  debugLog(String(gyroBiasX));
+  debugLog(String(gyroBiasY));
+  debugLog(String(gyroBiasZ));
+}
+
+//check current gyro readings
+void readGyro(float &gX, float &gY, float &gZ) {
+    readGyroData(MPU_ADDRESS, unprocessedGyro[0], unprocessedGyro[1], unprocessedGyro[2]);
+    rawGyroToDPS(unprocessedGyro[0], unprocessedGyro[1], unprocessedGyro[2], preprocessedGyro[0], preprocessedGyro[1], preprocessedGyro[2]);
+
+  gX = preprocessedGyro[0] - gyroBiasX;
+  gY = preprocessedGyro[1] - gyroBiasY;
+  gZ = preprocessedGyro[2] - gyroBiasZ;
+}
+
+//read current accelerometer
+float unprocessedAccel[3];
+float preprocessedAccel[3];
+void readAccel(float &aX, float &aY, float &aZ) {
+  readAccelData(MPU_ADDRESS, unprocessedAccel[0], unprocessedAccel[1], unprocessedAccel[2]);
+  rawAccelToGForce(unprocessedAccel[0], unprocessedAccel[1], unprocessedAccel[2], aX, aY, aZ );
+}
+
+//updates imu sensor data to rawData struct
+void updateIMU()  {
+    readAccel(rawData.accel[0], rawData.accel[1], rawData.accel[2]);      //update mpu sensor
+    readGyro(rawData.gyro[0],rawData.gyro[1],rawData.gyro[2]);
 }

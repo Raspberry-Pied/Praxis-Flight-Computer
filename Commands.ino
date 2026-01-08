@@ -25,6 +25,14 @@ void commandCheck() {
       landTimer = millis();
       debugLog(F("Simulated State --> Landed"));
     }
+    if (command.equalsIgnoreCase("debug"))  {
+      isDebug = 1;
+      debugLog(F("debug command received"));
+    }
+    if (command.equalsIgnoreCase("end"))  {
+      endLogging();
+      debugLog(F("end command received"));
+    }
   }
 }
 

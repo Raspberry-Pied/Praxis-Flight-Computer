@@ -1,4 +1,27 @@
 /*======================= PID CLOSED LOOP CONTROL & SERVO BEHAVIOURS ====================*/
+//PID CONTROL & SERVO VARIABLES
+double pidPitchTarget=0, pidRollTarget=0;       //target angle (vertical)
+double Kp=2, Ki=5, Kd=1;                        //INITIAL TUNING PARAMETERS
+int minPitchAngle=-15,maxPitchAngle=15;         //CONSTRAINED PITCH LIMITS
+int minRollAngle=-15,maxRollAngle=15;           //CONSTRAINED ROLL LIMITS
+float servoDeadband = 1;                        //how much tilt (deg) for servos to actuate
+const int maxPIDOutput = 30;                    //max internal pid correction - in valueless pid units, not angles
+
+//PID CONTROL
+#include <PID_v1.h>
+double pitchInput, pitchOutput;   //Input variables for pid
+double rollInput, rollOutput;     //outputs for pid
+PID pitchPID(&pitchInput, &pitchOutput, &pidPitchTarget, Kp, Ki, Kd, DIRECT);
+PID rollPID(&rollInput, &rollOutput, &pidRollTarget, Kp, Ki, Kd, DIRECT);
+
+
+
+//Servos
+#include <Servo.h>
+  Servo xServo1;
+  Servo xServo2;
+  Servo yServo1;
+  Servo yServo2;
 
 void lockServos() {
   servoLock = 1;
@@ -42,7 +65,7 @@ void startPID() {
   rollPID.SetOutputLimits(-maxPIDOutput, maxPIDOutput);
 }
 
-
+/*
 //compute new pid values
 void updatePID() {
   pitchInput = heading.pitch;
@@ -60,7 +83,7 @@ void updatePID() {
     adjustServos();
   }
 }
-
+*/
 //adjust servos to pid values
 void adjustServos() {
   moveXservos(xAngle);
