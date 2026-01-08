@@ -12,7 +12,7 @@ void checkFlightState() {
       break;
 
       case FlightState::burn:
-      if (!ended) { //(filtAccel.magnitude <= initAccel * burnoutSpeed)  { //////DETECT MOTOR BURNOUT
+      if (!ended) { //(velocity.magnitude <= initAccel * burnoutSpeed)  { //////DETECT MOTOR BURNOUT
         flightState = FlightState::coast;
         debugLog(F("Flight State --> Coast"));
         unlockServos();

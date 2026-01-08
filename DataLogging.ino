@@ -190,19 +190,19 @@ void dataLog()  {
                         String(velocity.x) + "," +
                         String(velocity.y) + "," +
                         String(velocity.z);
-
         logFile.println(csvLog);
       } else debugLog(F("Error Logging Sensor Data"));
-/*
+
       if (servoFile)  {
         String csvLog = String(heading.pitch) + "," +
                         String(heading.roll) + "," +
+                        String(heading.yaw) + "," +
                         String(xAngle) + "," +
                         String(yAngle);
 
         servoFile.println(csvLog);
       } else debugLog(F("Error Logging Servo Data"));
-*/
+
       dataTimer = millis();
     }
   }

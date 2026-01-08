@@ -2,7 +2,7 @@
 /*======================= PRAXIS FLIGHT COMPUTER & STABILITY CONTROL SYSTEM ====================*/
 /************************************************************************************************/
 //debug tools
-bool isDebug = 1;                                 //activate for heartbeat + debugging features
+bool isDebug = 0;                                 //activate for heartbeat + debugging features
 
 //PINS
 const int BUTTON_PIN = 2;
@@ -27,6 +27,9 @@ const unsigned long stopDelay = 5000;           //timer before stopping system a
 int detectLaunchAlt=10, detectLaunchG=2;        //G's and ALTITUDE (M) TO DETECT LIFTOFF
 int detectLandAlt=5,detectLandSpeed=5;          //altitude AND VELOCITY to detect landing
 float burnoutSpeed = 1.2;                       //gs to detect burnout
+
+const float alpha = 0.98f;                      //complementary filter weighting for heading
+
 
 /*======================= STRUCTS & ENUMS ====================*/
 //unified sensor struct
@@ -79,7 +82,6 @@ FlightState flightState = FlightState::ground;
 /*======================= GLOBAL VARIABLES ====================*/
 //float initPres;            //initlisation pressure
 float groundPres;           //init pres converted to hPa
-float initAccel;            //initialistaion net acceleration   /////////////
 bool dataLogging = false;   //TO TURN ON DATALOGGING
 int detectLaunchAccel;      //calculated value for liftoff accel
 //float filterData.altitude;    //filtered altitude
@@ -225,9 +227,6 @@ void initialise() {
   servoFilePath = createServoFile();  //create servo log file
   openServoFile(); 
 
-  //calibrate MPU6050 gyro
-  calibrateGyro();
-
   //start logging data
   dataLogging = true;
   debugLog(F("Datalogging Started"));
@@ -289,6 +288,9 @@ void setup() {
   startServos();
   zeroServos();
   startPID();
+
+  calibrateGyro();      //calibrate MPU6050 gyro
+  initOrientation();      //initialise orientation
   
   debugLog(F("System State --> On"));
 }
@@ -312,8 +314,6 @@ void loop() {
     filterData.altitude = 44330.0 * (1.0 - pow((filterData.pressure_hPa / groundPres), 0.1903));
   }
 
- // Serial.println("After bmp");
-
   //read IMU sensor data at set speed
   if (now - lastIMUTrigger >= IMUperiod) {
     float dt = (now - lastIMUTrigger) * 0.001f;
@@ -324,22 +324,21 @@ void loop() {
     // Use dt here for:
     // - gyro integration
     // - complementary / Madgwick filter
+    filterIMU();
     velocity = calculateVelocity(dt);  //check velocity
+
+    updateOrientation(dt);    //complementary filtered orientation
   }
 
-  //filtAccel = filterAccel(mpuAccelGforce);  //clean acceleration
   //heading = getOrientation(filtAccel);      //get orientation from filtered data
 
   //updatePID();                              //update pid controller
-  //Serial.println("after imu");
+
   dataLog();                                //log data to sd card
-  //Serial.println("After datalog");
   flushLogs();                              //write log buffers to sd card after set timer (flushTimer = 500ms)
-  //Serial.println("After flushlogs");
+
   ifApogee();                               //check if we have reached apogee
-  //Serial.println("After ifapogee");
+
   checkArmState();    //arming state machine for light & sound display
-  //Serial.println("After check armstate");
   checkFlightState();   //flight state 
-  //Serial.println("After check flightstate");
 }
