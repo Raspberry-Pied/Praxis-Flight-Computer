@@ -209,15 +209,15 @@ void systemArm()  {
 
 //system landed calls
 void systemLanded() {
-          dataLogging = false;
-          debugLog(F("Datalogging Paused"));
-          generateSummary();
           armState = ArmState::locked;
           debugLog(F("Sytem State --> Locked"));
-          debugLog(F("Flight Complete! <3 "));
+
+          generateSummary();
           endLogging();
+
           cute.play(S_HAPPY);
           ended = 1;
+          debugLog(F("Flight Complete! <3 "));
 }
 
 //initialise on 1st button press 

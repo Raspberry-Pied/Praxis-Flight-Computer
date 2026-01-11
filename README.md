@@ -30,6 +30,10 @@ servofile isn't writing correctly
 
 
 
+summary file data is incorrect
+
+
+
 remove gravity component from velocity
 
 

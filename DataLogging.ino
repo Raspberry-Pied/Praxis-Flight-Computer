@@ -68,7 +68,7 @@ String createFileWithHeader(const char* baseDir, const char* prefix, const char*
 String createLogFile() {
   const char* baseDirLogs = "/PRAXIS/LOGS/";
   const char* prefixLog = "Sens_";
-  const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),X Accel,Y Accel,Z Accel,X Gyro,Y Gyro,Z Gyro,Speed (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)";
+  const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),X Accel,Y Accel,Z Accel,X Gyro,Y Gyro,Z Gyro,Filter Pres,Filter Alt,Filter X Accel,Filter Y Accel,Filter Z Accel,Filter X Gyro,Filter Y Gyro,Filter Z Gyro,Speed (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)";
     
   return createFileWithHeader(baseDirLogs, prefixLog, logHeader);
 }
@@ -170,6 +170,42 @@ void openServoFile()  {
   }
 }
 
+//writes line of csv to logfile
+void writeLogFile() {
+  String csvLog = String(rawData.tempC) + "," +
+                  String(rawData.pressure_hPa) + "," +
+                  String(rawData.altitude) + "," +
+                  String(rawData.accel[0]) + "," +
+                  String(rawData.accel[1]) + "," +
+                  String(rawData.accel[2]) + "," +
+                  String(rawData.gyro[0]) + "," +
+                  String(rawData.gyro[1]) + "," +
+                  String(rawData.gyro[2]) + "," +
+                  String(filterData.pressure_hPa) + "," +
+                  String(filterData.altitude) + "," +
+                  String(filterData.accel[0]) + "," +
+                  String(filterData.accel[1]) + "," +
+                  String(filterData.accel[2]) + "," +
+                  String(filterData.gyro[0]) + "," +
+                  String(filterData.gyro[1]) + "," +
+                  String(filterData.gyro[2]) + "," +
+                  String(velocity.magnitude) + "," +
+                  String(velocity.x) + "," +
+                  String(velocity.y) + "," +
+                  String(velocity.z);
+  logFile.println(csvLog);
+}
+
+//writes line of csv to servo file
+void writeServoFile() {
+  String csvLog = String(heading.pitch) + "," +
+                  String(heading.roll) + "," +
+                  String(heading.yaw) + "," +
+                  String(xAngle) + "," +
+                  String(yAngle);
+  servoFile.println(csvLog);
+}
+
 //datalogging function
 void dataLog()  {
   if (dataLogging) {
@@ -177,30 +213,11 @@ void dataLog()  {
 
       //write results to sd in csv format
       if (logFile)  {
-        String csvLog = String(rawData.tempC) + "," +
-                        String(rawData.pressure_hPa) + "," +
-                        String(rawData.altitude) + "," +
-                        String(rawData.accel[0]) + "," +
-                        String(rawData.accel[1]) + "," +
-                        String(rawData.accel[2]) + "," +
-                        String(rawData.gyro[0]) + "," +
-                        String(rawData.gyro[1]) + "," +
-                        String(rawData.gyro[2]) + "," +
-                        String(velocity.magnitude) + "," +
-                        String(velocity.x) + "," +
-                        String(velocity.y) + "," +
-                        String(velocity.z);
-        logFile.println(csvLog);
+        writeLogFile();
       } else debugLog(F("Error Logging Sensor Data"));
 
       if (servoFile)  {
-        String csvLog = String(heading.pitch) + "," +
-                        String(heading.roll) + "," +
-                        String(heading.yaw) + "," +
-                        String(xAngle) + "," +
-                        String(yAngle);
-
-        servoFile.println(csvLog);
+        writeServoFile();
       } else debugLog(F("Error Logging Servo Data"));
 
       dataTimer = millis();
@@ -230,6 +247,7 @@ void flushLogs()  {
     if (SD.exists("/PRAXIS"))  {
       if (debugFile) debugFile.flush();
       if (logFile) logFile.flush();
+      if (servoFile) logFile.flush();
       lastFlushTime = flushTimer;
     } else {
       if (millis() - lastRestartAttempt > restartCooldown) {  //restart sd card if not detected
@@ -254,10 +272,18 @@ void flushNow() {
 
 //end debug logs
 void endLogging() {
+  dataLogging = false;
+  debugLog(F("Datalogging Paused"));
+  
   if (logFile)  {
     debugLog(F("Data Log file closing"));
     logFile.flush();
     logFile.close();
+  }
+  if (servoFile)  {
+    debugLog(F("Servo Log file closing"));
+    servoFile.flush();
+    servoFile.close();
   }
   if (debugFile) {
     debugLog(F("Debug Log file closing"));

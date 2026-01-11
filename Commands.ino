@@ -30,8 +30,8 @@ void commandCheck() {
       debugLog(F("debug command received"));
     }
     if (command.equalsIgnoreCase("end"))  {
-      endLogging();
       debugLog(F("end command received"));
+      endLogging();
     }
   }
 }
