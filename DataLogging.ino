@@ -24,7 +24,6 @@ void startSD()  {
   }
 
   if (!SD.exists("/PRAXIS/LOGS")) SD.mkdir("/PRAXIS/LOGS");
-  if (!SD.exists("/PRAXIS/SUMMARY")) SD.mkdir("/PRAXIS/SUMMARY");
   if (!SD.exists("/PRAXIS/DEBUG")) SD.mkdir("/PRAXIS/DEBUG");
 }
 
@@ -96,14 +95,6 @@ String createDebugFile() {
     return path;
 }
 
-//creates a summary file for end of flight
-String createSummaryFile() {
-    const char* baseDirSummary = "/PRAXIS/SUMMARY/";
-    const char* prefixSummary = "Sum_";
-    const char* summaryHeader = "Max Altitude (m),Apogee Timestamp (s),Flight Duration (s)";
-    
-    return createFileWithHeader(baseDirSummary, prefixSummary, summaryHeader);
-}
 
 //open debug log for use
 void openDebugFile()  {
@@ -225,20 +216,7 @@ void dataLog()  {
   }
 }
 
-//generate summary file at end of flight
-void generateSummary()  {
-  String summaryFilePath = createSummaryFile();
-  // -> /PRAXIS/SUMMARY/Summary_2.txt
-  File summaryFile = SD.open(summaryFilePath.c_str(),FILE_WRITE);
-  String summaryPrint = String(maxAlt,3) + "," +
-                        String(apogeeTime / 1000,3) + "," +
-                        String((millis() - flightStart) / 1000,3);
-  if (summaryFile)  {
-    summaryFile.println(summaryPrint);
-    summaryFile.close();
-    debugLog(F("Summary File Written"));
-  }
-}
+
 
 //flush log buffer to sd card
 void flushLogs()  {

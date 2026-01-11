@@ -52,7 +52,6 @@ void simulateBurnout()  {
       flightState = FlightState::coast;
       simulateCheck = 0;
       apogeeCheck = 1;
-      apogeeTimer = millis();
     }
   }
 } 

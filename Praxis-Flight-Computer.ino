@@ -83,14 +83,10 @@ ezBuzzer buzzer(BUZZER_PIN, BUZZER_TYPE_ACTIVE, HIGH); // create ezBuzzer object
 #include <Arduino.h>
 
 /*======================= GLOBAL VARIABLES ====================*/
-//float initPres;            //initlisation pressure
 float groundPres;           //init pres converted to hPa
 bool dataLogging = false;   //TO TURN ON DATALOGGING
 int detectLaunchAccel;      //calculated value for liftoff accel
-//float filterData.altitude;    //filtered altitude
 bool servoLock = 1;   //locks servo actuation
-unsigned long flightStart;
-unsigned long apogeeTime;
 bool ended = 0; //flight ended
 bool simulateCheck = 0;
 bool apogeeCheck =0;
@@ -176,7 +172,7 @@ void flashLED(unsigned long flashDelay,unsigned long &flashTimer) {
     flashTimer = millis();
   }
 }
-/*======================= APOGEE  ====================*/
+/*======================= APOGEE ====================*/
 //detect apogee
 bool detectApogee(SensorData filterData,Velocity velocity) {
   float verticalVelocity = velocity.z;    //vertical velocity component
@@ -205,7 +201,6 @@ void ifApogee() {
   //DETECT APOGEE
   if (!apogeeDetected && detectApogee(filterData, velocity)) {
     flightState = FlightState::apogee;
-    apogeeTime = millis() - flightStart;
     debugLog(F("Apogee detected! Max Altitude: "));
     debugLog(String(maxAlt));
     debugLog(F("Flight State --> Apogee"));
@@ -237,7 +232,6 @@ void systemLanded() {
           armState = ArmState::locked;
           debugLog(F("Sytem State --> Locked"));
 
-          generateSummary();
           endLogging();
 
           endNoise();
