@@ -74,8 +74,11 @@ FlightState flightState = FlightState::ground;
 #include <SPI.h>
 #include <SD.h>
 
-//Buzzer noises and other libraries
-#include <CuteBuzzerSounds.h>
+//Buzzer
+#include <ezBuzzer.h>
+ezBuzzer buzzer(BUZZER_PIN, BUZZER_TYPE_ACTIVE, HIGH); // create ezBuzzer object: pin, type, activeLevel
+
+//misc libraries
 #include <math.h>
 #include <Arduino.h>
 
@@ -130,12 +133,41 @@ unsigned long lastIMUTrigger = 0;
 
 /*======================= MISC OUTPUTS ====================*/
 // continuous buzzer beeps for when armed 
+int armMelody[] = {NOTE_E5,NOTE_G5};
+int armDuration[] = {8,16};
+int armlength = sizeof(armDuration) / sizeof(int);
 void armBuzzer(unsigned long &buzzerTimer) {
   if (millis()-buzzerTimer>=2000)  {
-    cute.play(S_MODE1);
+    buzzer.stop();
+    buzzer.playMelody(armMelody, armDuration, armlength); 
     buzzerTimer = millis();
   }
 }
+
+// play ending melody
+int endMelody[] = {NOTE_G5,NOTE_E5,NOTE_C5};
+int endDuration[] = {2,2,2};
+int endlength = sizeof(endDuration) / sizeof(int);
+void endNoise() {
+  buzzer.stop();
+  buzzer.playMelody(endMelody, endDuration, endlength); 
+}
+
+// play init noise
+void initMelody() {
+  buzzer.stop();
+  buzzer.beep(100,100,2);
+}
+
+// play turn on melody
+int onMelody[] = {NOTE_E5,NOTE_G5,NOTE_C5,NOTE_G5};
+int onDuration[] = {8,8,4,2};
+int onlength = sizeof(endDuration) / sizeof(int);
+void onBuzzer() {
+  buzzer.stop();
+  buzzer.playMelody(onMelody, onDuration, onlength); 
+}
+
 // flash led function - takes flashdelay input
 void flashLED(unsigned long flashDelay,unsigned long &flashTimer) {
   if (millis()-flashTimer>=flashDelay)  {
@@ -144,7 +176,7 @@ void flashLED(unsigned long flashDelay,unsigned long &flashTimer) {
     flashTimer = millis();
   }
 }
-/*======================= APOGEE / VELOCITY / CALCULATIONS ====================*/
+/*======================= APOGEE  ====================*/
 //detect apogee
 bool detectApogee(SensorData filterData,Velocity velocity) {
   float verticalVelocity = velocity.z;    //vertical velocity component
@@ -182,12 +214,6 @@ void ifApogee() {
 }
 
 /*======================= INITIALISATIONS ====================*/
-//BUZZER INITIALISE
-void startBuzzer()  {
-  cute.init(BUZZER_PIN);
-  cute.play(S_CONNECTION);
-  debugLog(F("Buzzer Initialised"));
-}
 
 //initialise pins
 void startPins()  {
@@ -204,7 +230,6 @@ void systemArm()  {
   debugLog(F("System State --> Armed"));
   lockServos();
   zeroServos();
-  cute.play(S_BUTTON_PUSHED);
 }
 
 //system landed calls
@@ -215,7 +240,7 @@ void systemLanded() {
           generateSummary();
           endLogging();
 
-          cute.play(S_HAPPY);
+          endNoise();
           ended = 1;
           debugLog(F("Flight Complete! <3 "));
 }
@@ -233,7 +258,7 @@ void initialise() {
 
   //move to initialised state, play noise
   armState = ArmState::initialised;     
-  cute.play(S_BUTTON_PUSHED);
+  initMelody();
   buttonTimer = millis();
   debugLog(F("System State --> Initialised")); 
 }
@@ -283,7 +308,6 @@ void setup() {
   startAccelerometer();
 
   startPins();
-  startBuzzer();
 
   startServos();
   zeroServos();
@@ -292,13 +316,15 @@ void setup() {
   calibrateGyro();      //calibrate MPU6050 gyro
   initOrientation();      //initialise orientation
   
+  onBuzzer();
   debugLog(F("System State --> On"));
 }
 
 //loop
 void loop() {
   unsigned long now = millis();
-  if(isDebug) heartBeat();                    //heartbeat for debugging
+  if(isDebug) heartBeat();                  //heartbeat for debugging
+  buzzer.loop();                            //buzzer trigger, must be in loop
 
   detectButton();                           //check for button press
   commandCheck();                           //check for serial command input
