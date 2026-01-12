@@ -8,21 +8,18 @@ unsigned long lastFlushTime = 0;
 const unsigned long flushInterval = 500;  // flush every 0.5s
 
 //SD card init
-void startSD()  {
-  delay(50);
-  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0)); // 4 MHz
-  delay(50);
-
-  while (true) {                                      //keep trying to start sd card until it works
-      if (SD.begin(csPIN)) {
-          Serial.println(F("SD Card Started"));
-          break; // SD initialized, exit loop
-      } else {
-          Serial.println(F("Could not find a valid SD card, retrying..."));
-          delay(500); // small delay to avoid spamming Serial too fast
-      }
+void startSD()  {                                     //keep trying to start sd card until it works
+  if (!SD.begin(csPIN)) {
+    while (true)  {
+      Serial.println(F("Could not find a valid SD card, retrying..."));
+      systemFaults |= FAULT_SD_CARD;
+      tone(BUZZER_PIN, 1000, 150);
+      delay(200);
+      tone(BUZZER_PIN, 800, 150);
+      delay(500);
+    }
   }
-
+  Serial.println(F("SD Card Started"));
   if (!SD.exists("/PRAXIS/LOGS")) SD.mkdir("/PRAXIS/LOGS");
   if (!SD.exists("/PRAXIS/DEBUG")) SD.mkdir("/PRAXIS/DEBUG");
 }
@@ -99,7 +96,10 @@ String createDebugFile() {
 //open debug log for use
 void openDebugFile()  {
   debugFile = SD.open(debugFilePath.c_str(), FILE_WRITE);
-  if (!debugFile) Serial.println(F("Error opening debug file"));
+  if (!debugFile) {
+    Serial.println(F("Error opening debug file"));
+    systemFaults |= FAULT_DEBUGLOG;
+  }
   debugLog(F("Debug file opened for writing"));
 }
 
@@ -146,6 +146,7 @@ void openLogFile()  {
   logFile = SD.open(logFilePath.c_str(), FILE_WRITE);
   if (!logFile) {
     debugLog(F("Error opening data log file"));
+    systemFaults |= FAULT_SENSORLOG;
   } else {
     debugLog(F("Data log file opened successfully"));
   }
@@ -156,6 +157,7 @@ void openServoFile()  {
   servoFile = SD.open(servoFilePath.c_str(), FILE_WRITE);
   if (!servoFile) {
     debugLog(F("Error opening servo log file"));
+    systemFaults |= FAULT_SERVOLOG;
   } else {
     debugLog(F("Servo log file opened successfully"));
   }

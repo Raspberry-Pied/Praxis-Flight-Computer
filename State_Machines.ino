@@ -6,7 +6,6 @@ void checkFlightState() {
       case FlightState::ground:
       if (filterData.altitude >= detectLaunchAlt) { //&& filtAccel.magnitude >= detectLaunchAccel)  {
         flightState = FlightState::burn;
-        flightStart = millis();
         debugLog(F("Flight State --> Burn"));
       }
       break;
@@ -41,6 +40,7 @@ void checkFlightState() {
       case FlightState::landed:
       if (!ended) {
         if (millis() - landTimer >= stopDelay) {
+          
           systemLanded();
         }
       }
@@ -66,7 +66,10 @@ void checkArmState() {
 
     case ArmState::armed:
     flashLED(100,flashTimer);
-    armBuzzer(buzzerTimer);
+      if (millis()-buzzerTimer>=2000)  {
+      playSound(SOUND_WARNING);
+      buzzerTimer = millis();
+      }
     break;
 
     case ArmState::locked:

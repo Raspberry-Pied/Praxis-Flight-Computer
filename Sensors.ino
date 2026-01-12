@@ -52,6 +52,7 @@ bool startBarometer() {
   if (!bmp.begin(BMP280_ADDRESS)) {
     debugLog(F("Could not find a valid BMP280 sensor"));
     flushNow();
+    systemFaults = FAULT_BMP;
     return false;
   }
 
@@ -75,7 +76,17 @@ bool startBarometer() {
 }
 
 //start accelerometer and validate connection
+#define WHO_AM_I 0x75
 void startAccelerometer() {
+  //check the sensor is responding
+  Wire.beginTransmission(MPU_ADDRESS);
+  Wire.write(WHO_AM_I);
+  if (Wire.endTransmission(false) != 0) {
+    debugLog(F("Accelerometer not detected!"));
+    systemFaults |= FAULT_IMU;
+    return;
+  }
+
   wakeSensor(MPU_ADDRESS); // wakes sensor from sleep mode
   delay(200);
   debugLog(F("Accelerometer Initialised"));

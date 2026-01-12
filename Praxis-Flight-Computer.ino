@@ -69,6 +69,17 @@ ArmState armState = ArmState::on;
 enum class FlightState {ground,burn,coast,apogee,descent,landed};
 FlightState flightState = FlightState::ground;
 
+//different melodies to play
+enum SoundType {
+  SOUND_STARTUP,
+  SOUND_SUCCESS,
+  SOUND_WARNING,
+  SOUND_ERROR,
+  SOUND_CRITICAL,
+  SOUND_END
+};
+
+
 /*======================= LIBRARIES ====================*/
 //SD card
 #include <SPI.h>
@@ -81,6 +92,8 @@ ezBuzzer buzzer(BUZZER_PIN, BUZZER_TYPE_ACTIVE, HIGH); // create ezBuzzer object
 //misc libraries
 #include <math.h>
 #include <Arduino.h>
+
+#include "Faults.h"   //include faults.h tab
 
 /*======================= GLOBAL VARIABLES ====================*/
 float groundPres;           //init pres converted to hPa
@@ -126,52 +139,6 @@ const unsigned long restartCooldown = 1000; // 1 sec
 unsigned long lastBMPTrigger = 0;
 unsigned long lastIMUTrigger = 0;
 
-
-/*======================= MISC OUTPUTS ====================*/
-// continuous buzzer beeps for when armed 
-int armMelody[] = {NOTE_E5,NOTE_G5};
-int armDuration[] = {8,16};
-int armlength = sizeof(armDuration) / sizeof(int);
-void armBuzzer(unsigned long &buzzerTimer) {
-  if (millis()-buzzerTimer>=2000)  {
-    buzzer.stop();
-    buzzer.playMelody(armMelody, armDuration, armlength); 
-    buzzerTimer = millis();
-  }
-}
-
-// play ending melody
-int endMelody[] = {NOTE_G5,NOTE_E5,NOTE_C5};
-int endDuration[] = {2,2,2};
-int endlength = sizeof(endDuration) / sizeof(int);
-void endNoise() {
-  buzzer.stop();
-  buzzer.playMelody(endMelody, endDuration, endlength); 
-}
-
-// play init noise
-void initMelody() {
-  buzzer.stop();
-  buzzer.beep(100,100,2);
-}
-
-// play turn on melody
-int onMelody[] = {NOTE_E5,NOTE_G5,NOTE_C5,NOTE_G5};
-int onDuration[] = {8,8,4,2};
-int onlength = sizeof(endDuration) / sizeof(int);
-void onBuzzer() {
-  buzzer.stop();
-  buzzer.playMelody(onMelody, onDuration, onlength); 
-}
-
-// flash led function - takes flashdelay input
-void flashLED(unsigned long flashDelay,unsigned long &flashTimer) {
-  if (millis()-flashTimer>=flashDelay)  {
-    ledState = !ledState;
-    digitalWrite(LED_PIN,ledState);
-    flashTimer = millis();
-  }
-}
 /*======================= APOGEE ====================*/
 //detect apogee
 bool detectApogee(SensorData filterData,Velocity velocity) {
@@ -208,7 +175,7 @@ void ifApogee() {
   }
 }
 
-/*======================= INITIALISATIONS ====================*/
+/*======================= OTHER ====================*/
 
 //initialise pins
 void startPins()  {
@@ -234,7 +201,7 @@ void systemLanded() {
 
           endLogging();
 
-          endNoise();
+          playSound(SOUND_END);
           ended = 1;
           debugLog(F("Flight Complete! <3 "));
 }
@@ -252,7 +219,7 @@ void initialise() {
 
   //move to initialised state, play noise
   armState = ArmState::initialised;     
-  initMelody();
+  playSound(SOUND_SUCCESS);
   buttonTimer = millis();
   debugLog(F("System State --> Initialised")); 
 }
@@ -310,8 +277,9 @@ void setup() {
   calibrateGyro();      //calibrate MPU6050 gyro
   initOrientation();      //initialise orientation
   
-  onBuzzer();
-  debugLog(F("System State --> On"));
+  if (!handleStartupResult()) {     //check systems nominal
+    failStart();                    //if critical system failed abort startup
+  }
 }
 
 //loop
