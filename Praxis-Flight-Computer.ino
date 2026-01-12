@@ -139,6 +139,9 @@ const unsigned long restartCooldown = 1000; // 1 sec
 unsigned long lastBMPTrigger = 0;
 unsigned long lastIMUTrigger = 0;
 
+unsigned long csvTimestamp = 0;     //data logging timestamp
+float csvTimestamp_s = 0;
+
 /*======================= APOGEE ====================*/
 //detect apogee
 bool detectApogee(SensorData filterData,Velocity velocity) {
@@ -215,6 +218,7 @@ void initialise() {
 
   //start logging data
   dataLogging = true;
+  csvTimestamp = millis();
   debugLog(F("Datalogging Started"));
 
   //move to initialised state, play noise
@@ -304,16 +308,16 @@ void loop() {
 
   //read IMU sensor data at set speed
   if (now - lastIMUTrigger >= IMUperiod) {
-    float dt = (now - lastIMUTrigger) * 0.001f;
+    uint32_t dt_ms = now - lastIMUTrigger;
+    float dt = dt_ms * 0.001f;
     lastIMUTrigger = now;
 
     updateIMU();
-
-    // Use dt here for:
-    // - gyro integration
-    // - complementary / Madgwick filter
     filterIMU();
+
     velocity = calculateVelocity(dt);  //check velocity
+    csvTimestamp += dt_ms;
+    csvTimestamp_s = csvTimestamp * 0.001f;
 
     updateOrientation(dt);    //complementary filtered orientation
   }

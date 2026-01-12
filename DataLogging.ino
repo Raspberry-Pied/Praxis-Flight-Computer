@@ -64,7 +64,7 @@ String createFileWithHeader(const char* baseDir, const char* prefix, const char*
 String createLogFile() {
   const char* baseDirLogs = "/PRAXIS/LOGS/";
   const char* prefixLog = "Sens_";
-  const char* logHeader = "Temp (C),Pressure (Pa),Altitude (m),X Accel,Y Accel,Z Accel,X Gyro,Y Gyro,Z Gyro,Filter Pres,Filter Alt,Filter X Accel,Filter Y Accel,Filter Z Accel,Filter X Gyro,Filter Y Gyro,Filter Z Gyro,Speed (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)";
+  const char* logHeader = "Time (s), Temp (C),Pressure (Pa),Altitude (m),X Accel,Y Accel,Z Accel,X Gyro,Y Gyro,Z Gyro,Filter Pres,Filter Alt,Filter X Accel,Filter Y Accel,Filter Z Accel,Filter X Gyro,Filter Y Gyro,Filter Z Gyro,Speed (m/s),X velocity (m/s),Y velocity (m/s),Z velocity (m/s)";
     
   return createFileWithHeader(baseDirLogs, prefixLog, logHeader);
 }
@@ -91,7 +91,6 @@ String createDebugFile() {
 
     return path;
 }
-
 
 //open debug log for use
 void openDebugFile()  {
@@ -165,7 +164,8 @@ void openServoFile()  {
 
 //writes line of csv to logfile
 void writeLogFile() {
-  String csvLog = String(rawData.tempC) + "," +
+  String csvLog = String(csvTimestamp_s,3) + "," +
+                  String(rawData.tempC) + "," +
                   String(rawData.pressure_hPa) + "," +
                   String(rawData.altitude) + "," +
                   String(rawData.accel[0]) + "," +

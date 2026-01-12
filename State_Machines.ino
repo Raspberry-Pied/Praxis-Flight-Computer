@@ -40,7 +40,6 @@ void checkFlightState() {
       case FlightState::landed:
       if (!ended) {
         if (millis() - landTimer >= stopDelay) {
-          
           systemLanded();
         }
       }
@@ -66,10 +65,10 @@ void checkArmState() {
 
     case ArmState::armed:
     flashLED(100,flashTimer);
-      if (millis()-buzzerTimer>=2000)  {
+    if (millis()-buzzerTimer>=2000)  {
       playSound(SOUND_WARNING);
       buzzerTimer = millis();
-      }
+    }
     break;
 
     case ArmState::locked:
