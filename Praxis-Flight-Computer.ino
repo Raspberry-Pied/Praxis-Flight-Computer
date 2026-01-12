@@ -218,7 +218,7 @@ void initialise() {
 
   //start logging data
   dataLogging = true;
-  csvTimestamp = millis();
+  csvTimestamp = 0;
   debugLog(F("Datalogging Started"));
 
   //move to initialised state, play noise
